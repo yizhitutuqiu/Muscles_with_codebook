@@ -1,0 +1,140 @@
+experiment:
+  name: tcn_codebook
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 25
+  eval_every: 200
+  save_every: 500
+  max_steps: 1500
+  joints3d_online_std: true
+  warmup_1_steps: 200
+  warmup_2_steps: 0
+  codebook_kmeans_init_samples: 0
+  codebook_kmeans_ema_virtual_per_code: 0.0
+  vq_dead_reset_warmup_2: false
+  vq_dead_reset_train: true
+  vq_explore_noise_std_frac: 0.1
+  vq_explore_noise_train_max_steps: 1000
+  vq_beta_schedule:
+    enabled: true
+    total_steps: null
+    phase1_frac: 0.10
+    phase2_end_frac: 0.2
+    beta_free: 0.0
+    beta_target: 0.2
+    ramp: linear
+
+optimizer:
+  lr: 0.00001
+  weight_decay: 0.000005
+  lr_schedule: warmup_cosine
+  lr_warmup_steps: 600
+  lr_min: 6.0e-7
+
+data:
+  source: mia
+  split: train
+  batch_size: 64
+  step: 30
+  pack:
+    mode: clip
+    clip_len: 30
+    flatten_order: time_major
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+checkpoints:
+  dir: custom/checkpoints/tcn_codebook
+
+model:
+  encoder_decoder_only: false
+  loss_weights:
+    joints3d_self: 10.0
+    vq_joints3d: 1.0
+    emg_branch: 1.0
+    emg_self: 10.0
+    emg_to_joints3d: 5.0
+    joints3d_to_emg: 5.0
+    vq_emg: 1.0
+
+  vq:
+    num_codes: 256
+    code_dim: 256
+    decay: 0.99
+    eps: 1.0e-5
+    beta: 0.25
+    reset_dead_codes: true
+    dead_code_threshold: 5.0e-5
+    reset_interval: 200
+    reset_samples: 8192
+
+  # 编码用 TCN：30 帧 in → TCN → 30 帧各自 63*256 维编码（共 1890 tokens）→ 1890 个 token 分别查 codebook → 30 个 63*256 量化结果 → 解码用 frame_mixer：30 块各自 Mixer 解码
+  modalities:
+    joints3d:
+      in_dim: 2250       # 30 * 75
+      hidden_dim: 512
+      token_count: 1890  # 30 * 63，30 帧每帧 63 个 token
+      code_dim: 256
+      encoder_type: tcn
+      decoder_type: frame_mixer
+      recon_weight: 1.0
+      online_std: false
+      frame_mixer:       # 仅 decoder 使用：每帧 63*256 → Mixer 解码 → 75
+        tokens_per_frame: 63
+        num_layers: 4
+        act: gelu
+        dropout: 0.0
+      temporal:
+        seq_len: 30
+        frame_dim: 75
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: frame_tokens
+        tokens_per_frame: 63
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3
+
+    emg:
+      in_dim: 240        # 30 * 8
+      hidden_dim: 256
+      token_count: 1890
+      code_dim: 256
+      encoder_type: tcn
+      decoder_type: frame_mixer
+      recon_weight: 1.0
+      online_std: true
+      frame_mixer:
+        tokens_per_frame: 63
+        num_layers: 4
+        act: gelu
+        dropout: 0.0
+      temporal:
+        seq_len: 30
+        frame_dim: 8
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: frame_tokens
+        tokens_per_frame: 63
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3

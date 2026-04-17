@@ -1,0 +1,130 @@
+experiment:
+  name: frame_codebook_mia_train_frame_for_stage2
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 50
+  save_every: 500
+  max_steps: 1500
+  joints3d_online_std: true
+  warmup_1_steps: 200
+  warmup_2_steps: 0
+  codebook_kmeans_init_samples: 0
+  codebook_kmeans_ema_virtual_per_code: 0.0
+  vq_dead_reset_warmup_2: false
+  vq_dead_reset_train: false
+  vq_explore_noise_std_frac: 1
+  vq_explore_noise_train_max_steps: 1000
+  vq_beta_schedule:
+    enabled: true
+    total_steps: null
+    phase1_frac: 0.1
+    phase2_end_frac: 0.4
+    beta_free: 0.0
+    beta_target: 0.5
+    ramp: linear
+
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.00005
+  lr_schedule: warmup_cosine
+  lr_warmup_steps: 600
+  lr_min: 5.0e-7
+
+data:
+  source: mia
+  split: train
+  batch_size: 64
+  step: 30
+
+  # 逐帧模式：与 Stage2 兼容。每条样本为一帧，(B*T, 75) / (B*T, 8)，encoder 每帧 75 → 63*256
+  pack:
+    mode: frame
+    clip_len: 1   # 逐帧时 viz 用 1（单帧），step 仍为 30（序列长度）
+    flatten_order: time_major
+
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+checkpoints:
+  dir: custom/checkpoints/frame_codebook_frame_for_stage2
+
+model:
+  encoder_decoder_only: false
+  loss_weights:
+    joints3d_self: 10.0
+    vq_joints3d: 1.0
+    emg_branch: 1.0
+    emg_self: 10.0
+    emg_to_joints3d: 5.0
+    joints3d_to_emg: 5.0
+    vq_emg: 1.0
+
+  vq:
+    num_codes: 256
+    code_dim: 256
+    decay: 0.99
+    eps: 1.0e-5
+    beta: 0.25
+    reset_dead_codes: true
+    dead_code_threshold: 5.0e-5
+    reset_interval: 200
+    reset_samples: 8192
+
+  # 逐帧：每帧 75 维 → Mixer 编码 63*256，63 个 token 查 codebook，Mixer 解码回 75。与 Stage2 一致（Stage2 用 stage1.joints3d.encoder( B*T, 75 ) → 63*256）
+  modalities:
+    joints3d:
+      in_dim: 75
+      hidden_dim: 512
+      token_count: 63
+      code_dim: 256
+      encoder_type: mixer
+      decoder_type: mixer
+      recon_weight: 1.0
+      online_std: false
+      temporal:
+        seq_len: 1
+        frame_dim: 75
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: none
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3
+
+    emg:
+      in_dim: 8
+      hidden_dim: 256
+      token_count: 63
+      code_dim: 256
+      encoder_type: mixer
+      decoder_type: mixer
+      recon_weight: 1.0
+      online_std: true
+      temporal:
+        seq_len: 1
+        frame_dim: 8
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: none
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3

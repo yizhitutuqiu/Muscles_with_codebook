@@ -1,0 +1,36 @@
+experiment:
+  name: stage2_pose2emg_eval
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 4
+
+data:
+  split: val
+  batch_size: 8
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  # 不填则按 split 用 miaofficial_{split}_eval.txt；填了则用该列表（eval train 时改 split: train 并去掉或改 filelist）
+  filelist: null
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+stage2:
+  # Stage II checkpoint produced by custom/stage2/train/train_stage2_pose2emg.py
+  checkpoint: custom/stage2/checkpoints/stage2_with_temporal_code/best.pt
+
+# Optional override (leave null to use the stage1_checkpoint stored inside stage2 ckpt)
+stage1:
+  checkpoint: null
+
+output:
+  # If null, default to custom/output/eval_stage2_pose2emg_official/<timestamp>/
+  out_dir: null
+

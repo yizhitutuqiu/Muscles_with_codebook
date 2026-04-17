@@ -1,0 +1,113 @@
+# MIA finetune after AMASS frame-aligned pretrain. Load pretrain from frame_codebook_amass_pretrain_clip30_frame_aligned.
+
+experiment:
+  name: frame_codebook_mia_finetune_clip30_frame_aligned
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 4
+  log_every: 50
+  save_every: 500
+  max_steps: 3000
+  warmup_1_steps: 200      # finetune: usually 0 (pretrain already trained enc/dec)
+  warmup_2_steps: 200      # optional short codebook-only phase
+  codebook_kmeans_init_samples: 10000   # 0 = use pretrain codebook as-is
+  codebook_kmeans_ema_virtual_per_code: 100.0
+  vq_dead_reset_warmup_2: false
+  vq_dead_reset_train: true
+  vq_explore_noise_std_frac: 8.0    # 0.1 to wake dead codes in joint train
+  vq_explore_noise_train_max_steps: null
+
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+  lr_schedule: warmup_cosine
+  lr_warmup_steps: 100
+  lr_min: 1.0e-6
+
+data:
+  source: mia
+  split: train
+  batch_size: 8
+  step: 30
+
+  pack:
+    mode: clip
+    clip_len: 30
+    flatten_order: time_major
+
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+pretrain_ckpt: custom/checkpoints/frame_codebook_amass_pretrain_clip30_frame_aligned/best.pt
+
+checkpoints:
+  dir: custom/checkpoints/frame_codebook_mia_finetune_clip30_frame_aligned
+
+model:
+  vq:
+    num_codes: 256
+    code_dim: 512
+    decay: 0.99
+    eps: 1.0e-5
+    beta: 10.0
+    reset_dead_codes: true
+    dead_code_threshold: 5.0e-5
+    reset_interval: 200
+    reset_samples: 8192
+
+  modalities:
+    joints3d:
+      in_dim: 2250
+      hidden_dim: 512
+      token_count: 30
+      code_dim: 512
+      encoder_type: tcn
+      decoder_type: tcn
+      recon_weight: 1.0
+      online_std: false
+      temporal:
+        seq_len: 30
+        frame_dim: 75
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: none
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3
+
+    emg:
+      in_dim: 240
+      hidden_dim: 256
+      token_count: 30
+      code_dim: 512
+      encoder_type: tcn
+      decoder_type: tcn
+      recon_weight: 1.0
+      online_std: true
+      temporal:
+        seq_len: 30
+        frame_dim: 8
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+        pool: none
+        upsample: none
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3

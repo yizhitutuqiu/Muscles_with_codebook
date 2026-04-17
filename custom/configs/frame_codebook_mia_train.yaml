@@ -1,0 +1,77 @@
+experiment:
+  name: frame_codebook_mia_train
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 4
+  log_every: 50
+  save_every: 500
+  eval_every: 500   # 每 N step 跑一次 val，按 val_loss 保存 best.pt；0 则按 train loss 保存 best
+  max_steps: 3000
+
+optimizer:
+  lr: 0.0002
+  weight_decay: 0.0001
+
+data:
+  source: mia
+  split: train
+  batch_size: 8
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  val_filelist: null   # null 时用 custom/tools/datasetsplits/miaofficial_val_eval.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+checkpoints:
+  dir: custom/checkpoints/frame_codebook
+
+model:
+  vq:
+    num_codes: 1024
+    code_dim: 256
+    decay: 0.99
+    eps: 1.0e-5
+    beta: 10.0
+    reset_dead_codes: true
+    dead_code_threshold: 5.0e-5
+    reset_interval: 200
+    reset_samples: 8192
+
+  modalities:
+    joints3d:
+      in_dim: 75
+      hidden_dim: 1024
+      token_count: 63
+      code_dim: 256
+      encoder_type: mlp
+      decoder_type: mlp
+      recon_weight: 1.0
+      online_std: false
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3
+
+    emg:
+      in_dim: 8
+      hidden_dim: 512
+      token_count: 63
+      code_dim: 256
+      encoder_type: mlp
+      decoder_type: mlp
+      recon_weight: 1.0
+      online_std: true
+      std:
+        eps: 1.0e-6
+        momentum: 0.01
+        clip_std_min: 1.0e-3
+

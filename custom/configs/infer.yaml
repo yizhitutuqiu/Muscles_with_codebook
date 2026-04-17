@@ -1,0 +1,23 @@
+# Stage2 关节序列 -> EMG 推理（供 main_api.Stage2EMGPredictor 使用）
+# 路径相对于 musclesinaction 仓库根目录（含 MIADatasetOfficial/、custom/ 的目录）
+
+runtime:
+  device: cuda
+
+stage2:
+  checkpoint: custom/stage2/checkpoints/stage2_pose2emg/best.pt
+
+# 可选：覆盖 Stage2 checkpoint 内记录的 stage1 路径；null 则用 ckpt 内嵌记录
+stage1:
+  checkpoint: null
+
+inference:
+  # 与训练一致的 clip 长度（Stage2 时空模块按固定 T 设计）
+  clip_len: 30
+  # 滑动窗口步长（与 MIA 数据集的 step 概念一致）：小于 clip_len 则窗口重叠，重叠帧输出取平均
+  step: 10
+  # 同时送入 GPU 的 clip 个数
+  inference_batch_size: 8
+  # 与训练 / 评测一致：对每帧做 root-relative
+  joints3d_root_center: true
+  joints3d_root_index: 8

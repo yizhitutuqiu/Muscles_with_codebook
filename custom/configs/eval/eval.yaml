@@ -1,0 +1,53 @@
+experiment:
+  name: mia_style_eval
+
+runtime:
+  device: cuda
+  num_workers: 8
+  batch_size: 8
+  retrieval:
+    device: cpu
+    query_batch_size: 8
+    train_chunk_size: 2048
+
+data:
+  step: 30
+  std: false
+  percent: 1.0
+  max_samples: null
+  joints3d_root_center: true
+  joints3d_root_index: 8
+
+protocols:
+  - name: id_exercises
+    enabled: true
+    split: val
+    ablation_dir: /data/litengmo/HSMR/golf_third_party/musclesinaction/musclesinaction/ablation/generalization_ID_nocond_exercises
+    train_filelist: train.txt
+    val_glob: "val*.txt"
+    val_filelists: null
+  - name: id_people
+    enabled: true
+    split: val
+    ablation_dir: /data/litengmo/HSMR/golf_third_party/musclesinaction/musclesinaction/ablation/generalization_ID_nocond_people
+    train_filelist: train.txt
+    val_glob: "valSubject*.txt"
+    val_filelists: null
+
+methods:
+  stage2:
+    enabled: true
+    checkpoint: /data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/stage2_with_clip5temp_cond/best.pt
+    stage1_checkpoint: null
+  official_cond:
+    enabled: true
+    checkpoint: pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth
+  official_nocond:
+    enabled: true
+    checkpoint: pretrained-checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth
+  retrieval:
+    enabled: true
+    max_train_samples: null
+
+output:
+  out_dir: null

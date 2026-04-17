@@ -1,0 +1,112 @@
+experiment:
+  name: clip_30_code_1024
+  seed: 42
+runtime:
+  device: cuda:2
+  num_workers: 32
+  log_every: 25
+  eval_every: 200
+  save_every: 500
+  max_steps: 1600
+  joints3d_online_std: true
+  warmup_1_steps: 200
+  warmup_2_steps: 0
+  codebook_kmeans_init_samples: 0
+  codebook_kmeans_ema_virtual_per_code: 0.0
+  vq_dead_reset_warmup_2: false
+  vq_dead_reset_train: true
+  vq_explore_noise_std_frac: 1.0
+  vq_explore_noise_train_max_steps: 1000
+  vq_beta_schedule:
+    enabled: true
+    total_steps: null
+    phase1_frac: 0.1
+    phase2_end_frac: 0.5
+    beta_free: 0.0
+    beta_target: 1.0
+    ramp: linear
+optimizer:
+  lr: 1.0e-05
+  weight_decay: 5.0e-06
+  lr_schedule: warmup_cosine
+  lr_warmup_steps: 600
+  lr_min: 6.0e-07
+data:
+  source: mia
+  split: train
+  batch_size: 8
+  step: 30
+  pack:
+    mode: clip
+    clip_len: 30
+    flatten_order: time_major
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: 'True'
+  std: 'False'
+  percent: 1.0
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  max_samples: null
+  require_files:
+  - emgvalues.npy
+  - joints3d.npy
+checkpoints:
+  dir: custom/checkpoints/batch_codebook/clip_30_code_1024
+model:
+  encoder_decoder_only: false
+  loss_weights:
+    joints3d_self: 10.0
+    vq_joints3d: 1.0
+    emg_branch: 1.0
+    emg_self: 10.0
+    emg_to_joints3d: 5.0
+    joints3d_to_emg: 5.0
+    vq_emg: 1.0
+  vq:
+    num_codes: 512
+    code_dim: 512
+    decay: 0.99
+    eps: 1.0e-05
+    beta: 0.25
+    reset_dead_codes: true
+    dead_code_threshold: 5.0e-05
+    reset_interval: 200
+    reset_samples: 8192
+  modalities:
+    joints3d:
+      hidden_dim: 1024
+      token_count: 1
+      code_dim: 512
+      encoder_type: unified_tcn
+      decoder_type: unified_tcn
+      recon_weight: 1.0
+      online_std: false
+      temporal:
+        frame_dim: 75
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+      std:
+        eps: 1.0e-06
+        momentum: 0.01
+        clip_std_min: 0.001
+    emg:
+      hidden_dim: 1024
+      token_count: 1
+      code_dim: 512
+      encoder_type: unified_tcn
+      decoder_type: unified_tcn
+      recon_weight: 1.0
+      online_std: true
+      temporal:
+        frame_dim: 8
+        kernel_size: 3
+        num_layers: 4
+        dilation_base: 2
+        dropout: 0.0
+      std:
+        eps: 1.0e-06
+        momentum: 0.01
+        clip_std_min: 0.001
+name: clip_30_code_1024

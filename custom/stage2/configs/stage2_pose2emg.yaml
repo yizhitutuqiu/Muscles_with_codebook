@@ -1,0 +1,101 @@
+experiment:
+  name: stage2_pose2emg
+  seed: 42
+
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 50
+  max_steps: 20000
+  save_every: 1000
+  eval_every: 400
+  # 梯度裁剪，驯服深层 Transformer，避免 Raw 目标导致梯度击穿
+  grad_clip_norm: 1.0
+
+optimizer:
+  lr: 0.0005
+  weight_decay: 0.00005
+  # 余弦退火：lr 从 lr 线性衰减到 lr_min（在 max_steps 内）
+  warmup_steps: 600
+  lr_schedule: cosine_annealing
+  lr_min: 8.0e-6
+
+data:
+  split: train
+  batch_size: 128
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "True"
+  std: "False"
+  percent: 1.0
+  # full 模式下用 Stage1 的 EMG Standardizer 把 target 缩放到均值0方差1再监督，指标用 raw 空间
+  emg_normalize_target: true
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  val_filelist: custom/tools/datasetsplits/miaofficial_val_eval.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+stage1:
+  # Stage I: use best.pt or last.pt in experiment root; step checkpoints are under <experiment_root>/ckpt/
+  checkpoint: custom/checkpoints/frame_codebook_frame_for_stage2/best.pt
+
+checkpoints:
+  dir: custom/stage2/checkpoints/stage2_pose2emg
+
+model:
+  token_count: 63
+  dim: 256
+  # 连续分支：mixer=75→63 Token；joint_25=25 关节各 3 维→25 Token（论文对齐，与 dcsa_asymmetric 搭配）
+  cont_encoder_type: joint_25
+  cont_hidden_dim: 1024
+  cont_joint_hidden_dim: 128  # joint_25 时小 MLP 中间维，避免弱 Query 冷启动
+
+  # 可插拔融合：dcsa（对称）| dcsa_asymmetric（Q=25,K/V=63，论文）| residual_add
+  # 论文对齐方案：cont_encoder_type: joint_25 + fusion_type: dcsa_asymmetric
+  fusion_type: dcsa_asymmetric
+  dcsa:
+    dim: 256
+    num_heads: 8
+    dropout: 0.15
+  #当 fusion_type: residual_add 时使用
+  fusion_residual_add:
+    dim: 256
+    detail_layers: 3
+    detail_hidden_ratio: 2.0
+    scale: 1.0
+    dropout: 0.0
+  dcsa_asymmetric:
+    dim: 256
+    num_heads: 8
+    dropout: 0.15
+
+  # 可插拔融合后时序：dstformer | tcn
+  temporal_type: dstformer
+  dst:
+    dim: 256
+    num_heads: 8
+    mlp_ratio: 4.0
+    dropout: 0.1
+    attn_dropout: 0.1
+    num_layers: 4
+  # 当 temporal_type: tcn 时使用
+  tcn:
+    dim: 256
+    hidden_dim: 512
+    kernel_size: 3
+    num_layers: 4
+    dilation_base: 2
+    dropout: 0.0
+
+  # EMG 头：Flatten 保留 25 关节独立拓扑，避免 Spatial Pooling 混叠局部肌肉信号
+  emg_head_type: flatten
+  emg_hidden: 256
+  emg_mixer_hidden_dim: 256
+  emg_mixer_num_layers: 4
+  # 输出策略：full=融合特征直接回归 8 维
+  emg_pred_mode: full
+  # 时空位置编码时间维最大长度（joint_25 时在 z_cont 送入 DCSA 前注入）
+  max_seq_len: 256

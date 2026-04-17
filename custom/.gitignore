@@ -1,0 +1,5 @@
+checkpoints/
+stage2/checkpoints/
+logs/
+output/
+save_train/

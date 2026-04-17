@@ -1,0 +1,34 @@
+ood_train_config: /data/litengmo/HSMR/mia_custom/custom/configs/ood/ood.yaml
+
+runtime:
+  device: cuda
+  num_workers: 8
+  batch_size: 8
+  step: 30
+  std: false
+  percent: 1.0 。 
+  max_samples: null
+  retrieval:
+    device: cpu
+    query_batch_size: 8
+    train_chunk_size: 2048
+    max_train_samples: null
+
+filters:
+  protocol: null
+  target: null
+
+methods:
+  stage2:
+    enabled: true
+    ckpt_name: best.pt
+  official:
+    enabled: true
+    checkpoint: pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth
+    eval_cond: true
+    eval_nocond: true
+  retrieval:
+    enabled: true
+
+output:
+  out_dir: null

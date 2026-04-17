@@ -1,0 +1,31 @@
+# 批量跑 codebook 的基础配置文件
+# 将以 base_config 为基础，把 experiments 里的字段 override 进去
+
+base_config: "custom/configs/clip/new_temporal_vq.yaml"
+checkpoint_dir: "custom/checkpoints/batch_codebook" # 所有的实验结果统一存放在这里
+csv_output: "custom/checkpoints/batch_codebook/summary.csv" # 最后的汇总表格
+
+tmux:
+  session_name: "temp_codebook_train"
+  attach: true
+  fail_if_exists: true
+
+experiments:
+  - name: "clip_5_code_256"
+    data:
+      pack:
+        clip_len: 5
+    model:
+      vq:
+        num_codes: 128
+        code_dim: 256
+        
+  - name: "clip_10_code_256"
+    data:
+      pack:
+        clip_len: 10
+    model:
+      vq:
+        num_codes: 128
+        code_dim: 256
+        

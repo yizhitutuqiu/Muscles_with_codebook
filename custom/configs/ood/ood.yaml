@@ -1,0 +1,35 @@
+base:
+  stage2_config: /data/litengmo/HSMR/mia_custom/custom/stage2/configs/stage2_with_512codebook.yaml
+
+output:
+  ckpt_root: /data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/stage2_ood
+
+runtime:
+  device: cuda
+
+train:
+  resume: true
+  init: scratch
+  init_stage2_checkpoint: null
+  overrides:
+    max_steps: null
+    lr: null
+    batch_size: null
+    save_every: null
+    eval_every: null
+
+protocols:
+  - name: exercises
+    enabled: true
+    ablation_dir: /data/litengmo/HSMR/golf_third_party/musclesinaction/musclesinaction/ablation/generalizationexercises
+    val_glob: "val_*.txt"
+    train_pattern: "train_{target}.txt"
+    val_pattern: "val_{target}.txt"
+    targets: null
+  - name: people
+    enabled: true
+    ablation_dir: /data/litengmo/HSMR/golf_third_party/musclesinaction/musclesinaction/ablation/generalizationpeople
+    val_glob: "val_Subject*.txt"
+    train_pattern: "train_{target}.txt"
+    val_pattern: "val_{target}.txt"
+    targets: null

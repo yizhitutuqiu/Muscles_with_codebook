@@ -1,0 +1,10 @@
+MIADatasetOfficial/train/Subject0/ElbowPunch/1000
+MIADatasetOfficial/train/Subject0/ElbowPunch/1001
+MIADatasetOfficial/train/Subject0/ElbowPunch/1002
+MIADatasetOfficial/train/Subject0/ElbowPunch/1003
+MIADatasetOfficial/train/Subject0/ElbowPunch/1004
+MIADatasetOfficial/train/Subject0/ElbowPunch/1005
+MIADatasetOfficial/train/Subject0/ElbowPunch/1006
+MIADatasetOfficial/train/Subject0/ElbowPunch/1007
+MIADatasetOfficial/train/Subject0/ElbowPunch/1008
+MIADatasetOfficial/train/Subject0/ElbowPunch/1009
