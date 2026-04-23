@@ -471,6 +471,8 @@ def _eval_official_model_on_filelist(
         gt_bt8 = emg.permute(0, 2, 1).contiguous()
 
         with torch.no_grad():
+            # Ensure the condition tensor is on the same device as the model's parameters.
+            cond = cond.to(device)
             pred_b8t = model(skeleton, cond)
         if pred_b8t.ndim != 3 or pred_b8t.shape != (b, 8, t):
             raise RuntimeError(f"Unexpected official model output shape: {tuple(pred_b8t.shape)}")
@@ -618,6 +620,75 @@ def _eval_retrieval_on_filelist(
     return pred_cat, gt_cat, per_sequence_rows
 
 
+def _is_exercise_name(val_filelist: str) -> bool:
+    s = str(val_filelist).strip()
+    if not s.startswith("val"):
+        return False
+    if "Subject" in s:
+        return False
+    if "_" in s:
+        return False
+    return True
+
+
+def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str]) -> Path:
+    rows = []
+    with open(summary_csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            rows.append(dict(r))
+
+    table: Dict[str, Dict[str, str]] = {}
+    for r in rows:
+        proto = str(r.get("protocol", "")).strip()
+        val_name = str(r.get("val_filelist", "")).strip()
+        method = str(r.get("method", "")).strip()
+        rmse = r.get("official_global_rmse", None)
+
+        if proto == "id_exercises" or _is_exercise_name(val_name):
+            if method not in methods:
+                continue
+            if val_name not in table:
+                table[val_name] = {}
+            if rmse is not None and str(rmse).strip():
+                try:
+                    table[val_name][method] = f"{float(rmse):.2f}"
+                except Exception:
+                    pass
+
+    out_path = summary_csv_path.parent / "summary_processed.csv"
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["exercise", *methods])
+        
+        method_sums = {m: 0.0 for m in methods}
+        method_counts = {m: 0 for m in methods}
+        
+        for ex in sorted(table.keys()):
+            row = [ex]
+            for m in methods:
+                val_str = table[ex].get(m, "")
+                row.append(val_str)
+                if val_str:
+                    try:
+                        method_sums[m] += float(val_str)
+                        method_counts[m] += 1
+                    except Exception:
+                        pass
+            writer.writerow(row)
+            
+        # Add average row
+        avg_row = ["Average"]
+        for m in methods:
+            if method_counts[m] > 0:
+                avg_row.append(f"{method_sums[m] / method_counts[m]:.2f}")
+            else:
+                avg_row.append("")
+        writer.writerow(avg_row)
+
+    return out_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -754,7 +825,7 @@ def main() -> None:
                 num_workers=num_workers,
                 step=step,
                 std=std,
-                cond=True,
+                cond=False,  # NOTE: changed to False to test no_cond generalization performance
                 percent=percent,
                 max_samples=max_samples,
                 device=device,
@@ -1015,8 +1086,19 @@ def main() -> None:
 
     summary_csv = out_root / "summary.csv"
     _write_csv_rows(summary_csv, per_case_summary_rows, summary_fieldnames)
+    
+    # Identify which methods were actually evaluated
+    used_methods = []
+    for m in ["stage2", "official_cond", "official_nocond", "retrieval"]:
+        if locals().get(f"{m}_enabled"):
+            used_methods.append(m)
+            
+    # Process and save the summary with averages
+    processed_csv = _process_and_save_summary(summary_csv, used_methods)
+
     print("[MiaStyleEval] out_root =", out_root)
     print("[MiaStyleEval] summary_csv =", summary_csv)
+    print("[MiaStyleEval] summary_processed_csv =", processed_csv)
 
 
 if __name__ == "__main__":

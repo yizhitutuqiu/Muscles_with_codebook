@@ -1,0 +1,26 @@
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2"
+csv_output: "custom/stage2/checkpoints/batch_stage2/summary_h4.csv"
+
+tmux:
+  session_name: "batch_stage2_train_h4"
+  attach: true
+  fail_if_exists: false
+
+# 设定用于跑实验的 GPU
+gpus: [3, 4]
+
+experiments:
+  # H4 假设：使用新的重构架构 Stage2Pose2EMG_H4，显式注入可学习的隐式偏置（Implicit Bias）
+  - name: "exp_h4_implicit_bias"
+    use_h4_refactor: true
+    model:
+      cont_encoder_type: joint_25
+      fusion_type: dcsa_asymmetric
+
+  # 另一个对比验证：在 H4 的基础上，使用 mixer 作为连续特征提取器，看看两者组合能否打破 10.67 瓶颈
+  - name: "exp_h4_implicit_bias_mixer"
+    use_h4_refactor: true
+    model:
+      cont_encoder_type: mixer
+      fusion_type: dcsa_asymmetric

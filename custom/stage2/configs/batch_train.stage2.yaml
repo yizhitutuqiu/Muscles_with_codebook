@@ -1,0 +1,46 @@
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h5"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h5/summary.csv"
+
+tmux:
+  session_name: "batch_stage2_h5"
+  attach: true
+  fail_if_exists: false
+
+# 设定用于跑实验的 GPU，每个 GPU 跑一个 case
+gpus: [3, 4, 5, 6]
+
+experiments:
+  # 1. H5 Full: DSTFormerV2 (RoPE + LTC + SwiGLU) + DCSA with spatial PE for discrete tokens
+  - name: "exp_h5_full"
+    data:
+      batch_size: 32  # 减小 batch size 以防 OOM
+    model:
+      temporal_type: dstformer_v2
+      dst_v2:
+        num_layers: 6
+        use_rope: true
+        use_ltc: true
+        
+  # 2. H5 w/o LTC: DSTFormerV2 without Local Temporal Convolution
+  - name: "exp_h5_no_ltc"
+    model:
+      temporal_type: dstformer_v2
+      dst_v2:
+        num_layers: 6
+        use_rope: true
+        use_ltc: false
+
+  # 3. H5 w/o RoPE: DSTFormerV2 without Rotary Position Embeddings
+  - name: "exp_h5_no_rope"
+    model:
+      temporal_type: dstformer_v2
+      dst_v2:
+        num_layers: 6
+        use_rope: false
+        use_ltc: true
+
+  # 4. H2 Baseline (to compare directly in the same run)
+  - name: "exp_h2_baseline"
+    model:
+      temporal_type: dstformer

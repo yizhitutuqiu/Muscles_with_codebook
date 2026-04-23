@@ -1,0 +1,17 @@
+exercise,stage2(cond),stage2(no_cond),official_cond,official_nocond,retrieval
+valElbowPunch,12.29,12.17,11.45,12.87,14.44
+valFrontKick,7.18,7.25,7.33,7.45,9.03
+valFrontPunch,7.85,7.81,7.67,7.91,9.91
+valHighKick,9.45,9.49,9.6,9.82,12.57
+valHookPunch,10.52,10.69,9.65,10.13,13.45
+valJumpingJack,18.28,18,16.68,17.57,22.78
+valKneeKick,7.38,7.41,7.71,8.06,10.66
+valLegBack,8.09,8.28,8.16,8.58,11.88
+valLegCross,7.14,7.03,7.09,6.79,9.43
+valRonddeJambe,19.5,21.2,18.93,22.74,22.55
+valRunning,7.92,7.57,7.54,7.78,9.65
+valShuffle,8.93,8.61,8.9,8.46,10.84
+valSideLunges,10.8,11,12.77,12.66,16.45
+valSlowSkater,10.21,10.66,10.91,11,14.16
+valSquat,12.94,12.98,13.86,13.84,17.82
+mean,10.56533333,10.6766667,10.55,11.044,13.708

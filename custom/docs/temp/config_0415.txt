@@ -1,0 +1,101 @@
+[Stage2Train] ========== Config ==========
+experiment:
+  name: stage2_with_clip5temp_cond
+  seed: 42
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 25
+  max_steps: 20000
+  save_every: 1000
+  eval_every: 400
+  grad_clip_norm: 1.0
+  distributed:
+    enabled: true
+    gpus:
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    backend: nccl
+optimizer:
+  lr: 0.0001
+  weight_decay: 5.0e-05
+  warmup_steps: 600
+  lr_schedule: cosine_annealing
+  lr_min: 8.0e-06
+data:
+  split: train
+  batch_size: 32
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: 'True'
+  std: 'False'
+  percent: 1.0
+  emg_normalize_target: true
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  val_filelist: custom/tools/datasetsplits/miaofficial_val_eval.txt
+  max_samples: null
+  require_files:
+  - emgvalues.npy
+  - joints3d.npy
+stage1:
+  checkpoint: custom/checkpoints/batch_codebook/clip_5_code_256/best.pt
+checkpoints:
+  dir: custom/stage2/checkpoints/stage2_with_clip5temp_cond
+model:
+  token_count: 1
+  dim: 256
+  cont_encoder_type: joint_25
+  cont_hidden_dim: 1024
+  cont_joint_hidden_dim: 128
+  fusion_type: dcsa_asymmetric
+  dcsa:
+    dim: 256
+    num_heads: 8
+    dropout: 0.15
+  dcsa_asymmetric:
+    dim: 256
+    num_heads: 8
+    dropout: 0.15
+  temporal_type: dstformer
+  dst:
+    dim: 256
+    num_heads: 8
+    mlp_ratio: 4.0
+    dropout: 0.1
+    attn_dropout: 0.1
+    num_layers: 4
+  emg_head_type: flatten
+  emg_hidden: 256
+  emg_mixer_hidden_dim: 256
+  emg_mixer_num_layers: 4
+  emg_pred_mode: full
+  max_seq_len: 256
+  use_cond: true
+
+[Stage2Train] fusion_type=dcsa_asymmetric temporal_type=dstformer | ckpt_dir=/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/stage2_with_clip5temp_cond | max_steps=20000
+[Stage2Train] ==============================
+[Stage2Train] log file -> /data/litengmo/HSMR/mia_custom/custom/stage2/logs/train_20260415_112811.log
+[Stage2Train] {'step': 1, 'loss_smooth_l1': 15.851500511169434, 'loss_mse': 566.4224243164062, 'loss_mae': 16.3460636138916, 'lr': 9.999999943249774e-05, 'fps_frames_per_sec': 31.136807329635413, 'loss_smooth_l1_norm': 0.3649560213088989, 'ch_rightquad_smooth_l1': 19.744613647460938, 'ch_leftquad_smooth_l1': 10.293000221252441, 'ch_rightham_smooth_l1': 16.779123306274414, 'ch_leftham_smooth_l1': 18.44763946533203, 'ch_rightglutt_smooth_l1': 21.500856399536133, 'ch_leftglutt_smooth_l1': 11.13528060913086, 'ch_leftbicep_smooth_l1': 15.0530424118042, 'ch_rightbicep_smooth_l1': 13.858449935913086}
+[Stage2Train] {'step': 25, 'loss_smooth_l1': 10.044454574584961, 'loss_mse': 238.118408203125, 'loss_mae': 10.535229682922363, 'lr': 9.999964531154765e-05, 'fps_frames_per_sec': 175.5287285862072, 'loss_smooth_l1_norm': 0.18969115614891052, 'ch_rightquad_smooth_l1': 14.139344215393066, 'ch_leftquad_smooth_l1': 8.27232551574707, 'ch_rightham_smooth_l1': 9.980645179748535, 'ch_leftham_smooth_l1': 10.116596221923828, 'ch_rightglutt_smooth_l1': 13.357239723205566, 'ch_leftglutt_smooth_l1': 7.301619529724121, 'ch_leftbicep_smooth_l1': 8.911375999450684, 'ch_rightbicep_smooth_l1': 8.27648639678955}
+[Stage2Train] {'step': 50, 'loss_smooth_l1': 11.319417953491211, 'loss_mse': 499.1848449707031, 'loss_mae': 11.805731773376465, 'lr': 9.99985812516603e-05, 'fps_frames_per_sec': 191.50372370755042, 'loss_smooth_l1_norm': 0.2616274952888489, 'ch_rightquad_smooth_l1': 14.393892288208008, 'ch_leftquad_smooth_l1': 9.195778846740723, 'ch_rightham_smooth_l1': 10.679326057434082, 'ch_leftham_smooth_l1': 7.614955425262451, 'ch_rightglutt_smooth_l1': 19.06160545349121, 'ch_leftglutt_smooth_l1': 11.063830375671387, 'ch_leftbicep_smooth_l1': 11.182100296020508, 'ch_rightbicep_smooth_l1': 7.363858222961426}
+[Stage2Train] {'step': 75, 'loss_smooth_l1': 9.646248817443848, 'loss_mse': 280.0843200683594, 'loss_mae': 10.132377624511719, 'lr': 9.99968078367471e-05, 'fps_frames_per_sec': 197.54530604891076, 'loss_smooth_l1_norm': 0.2158069610595703, 'ch_rightquad_smooth_l1': 12.29164981842041, 'ch_leftquad_smooth_l1': 9.466389656066895, 'ch_rightham_smooth_l1': 6.917890548706055, 'ch_leftham_smooth_l1': 8.260004043579102, 'ch_rightglutt_smooth_l1': 14.54517936706543, 'ch_leftglutt_smooth_l1': 10.015399932861328, 'ch_leftbicep_smooth_l1': 7.871750831604004, 'ch_rightbicep_smooth_l1': 7.801726818084717}
+[Stage2Train] {'step': 100, 'loss_smooth_l1': 11.067367553710938, 'loss_mse': 384.5179748535156, 'loss_mae': 11.556262016296387, 'lr': 9.999432509415637e-05, 'fps_frames_per_sec': 200.60336251462354, 'loss_smooth_l1_norm': 0.25197628140449524, 'ch_rightquad_smooth_l1': 15.22493839263916, 'ch_leftquad_smooth_l1': 9.775605201721191, 'ch_rightham_smooth_l1': 10.090243339538574, 'ch_leftham_smooth_l1': 10.005784034729004, 'ch_rightglutt_smooth_l1': 14.269184112548828, 'ch_leftglutt_smooth_l1': 9.19517707824707, 'ch_leftbicep_smooth_l1': 12.099387168884277, 'ch_rightbicep_smooth_l1': 7.878622531890869}
+[Stage2Train] {'step': 125, 'loss_smooth_l1': 9.696249961853027, 'loss_mse': 294.9270935058594, 'loss_mae': 10.179865837097168, 'lr': 9.999113306217495e-05, 'fps_frames_per_sec': 194.41893003257218, 'loss_smooth_l1_norm': 0.2133558690547943, 'ch_rightquad_smooth_l1': 13.35622787475586, 'ch_leftquad_smooth_l1': 8.101309776306152, 'ch_rightham_smooth_l1': 7.585383892059326, 'ch_leftham_smooth_l1': 7.971831798553467, 'ch_rightglutt_smooth_l1': 13.637381553649902, 'ch_leftglutt_smooth_l1': 10.019877433776855, 'ch_leftbicep_smooth_l1': 8.696063041687012, 'ch_rightbicep_smooth_l1': 8.201927185058594}
+[Stage2Train] {'step': 150, 'loss_smooth_l1': 9.638615608215332, 'loss_mse': 286.2333068847656, 'loss_mae': 10.122998237609863, 'lr': 9.9987231790028e-05, 'fps_frames_per_sec': 197.02247313674258, 'loss_smooth_l1_norm': 0.2071484923362732, 'ch_rightquad_smooth_l1': 11.80288314819336, 'ch_leftquad_smooth_l1': 7.981085777282715, 'ch_rightham_smooth_l1': 9.091405868530273, 'ch_leftham_smooth_l1': 9.878643035888672, 'ch_rightglutt_smooth_l1': 12.010055541992188, 'ch_leftglutt_smooth_l1': 8.540483474731445, 'ch_leftbicep_smooth_l1': 8.033493041992188, 'ch_rightbicep_smooth_l1': 9.770879745483398}
+[Stage2Train] {'step': 175, 'loss_smooth_l1': 8.225140571594238, 'loss_mse': 198.67051696777344, 'loss_mae': 8.706856727600098, 'lr': 9.998262133787792e-05, 'fps_frames_per_sec': 199.0154512658734, 'loss_smooth_l1_norm': 0.1702404022216797, 'ch_rightquad_smooth_l1': 11.623934745788574, 'ch_leftquad_smooth_l1': 8.117488861083984, 'ch_rightham_smooth_l1': 4.919491291046143, 'ch_leftham_smooth_l1': 6.878803730010986, 'ch_rightglutt_smooth_l1': 12.400118827819824, 'ch_leftglutt_smooth_l1': 7.734638690948486, 'ch_leftbicep_smooth_l1': 6.428495407104492, 'ch_rightbicep_smooth_l1': 7.698147773742676}
+[Stage2Train] {'step': 200, 'loss_smooth_l1': 10.106801986694336, 'loss_mse': 307.4982604980469, 'loss_mae': 10.592724800109863, 'lr': 9.997730177682362e-05, 'fps_frames_per_sec': 200.11954121935372, 'loss_smooth_l1_norm': 0.2250920832157135, 'ch_rightquad_smooth_l1': 11.362691879272461, 'ch_leftquad_smooth_l1': 10.706324577331543, 'ch_rightham_smooth_l1': 8.728960990905762, 'ch_leftham_smooth_l1': 9.304557800292969, 'ch_rightglutt_smooth_l1': 14.202917098999023, 'ch_leftglutt_smooth_l1': 9.253327369689941, 'ch_leftbicep_smooth_l1': 8.565098762512207, 'ch_rightbicep_smooth_l1': 8.730538368225098}
+[Stage2Train] {'step': 225, 'loss_smooth_l1': 10.035553932189941, 'loss_mse': 345.4859619140625, 'loss_mae': 10.519889831542969, 'lr': 9.997127318889929e-05, 'fps_frames_per_sec': 196.66629094115413, 'loss_smooth_l1_norm': 0.2116105705499649, 'ch_rightquad_smooth_l1': 12.87527084350586, 'ch_leftquad_smooth_l1': 6.780157089233398, 'ch_rightham_smooth_l1': 10.369384765625, 'ch_leftham_smooth_l1': 8.611002922058105, 'ch_rightglutt_smooth_l1': 17.035511016845703, 'ch_leftglutt_smooth_l1': 6.954157829284668, 'ch_leftbicep_smooth_l1': 10.083624839782715, 'ch_rightbicep_smooth_l1': 7.575319290161133}
+[Stage2Train] {'step': 250, 'loss_smooth_l1': 9.317317962646484, 'loss_mse': 258.5437316894531, 'loss_mae': 9.802955627441406, 'lr': 9.996453566707326e-05, 'fps_frames_per_sec': 197.99982737285643, 'loss_smooth_l1_norm': 0.18944969773292542, 'ch_rightquad_smooth_l1': 12.882818222045898, 'ch_leftquad_smooth_l1': 8.292580604553223, 'ch_rightham_smooth_l1': 8.142852783203125, 'ch_leftham_smooth_l1': 7.857120513916016, 'ch_rightglutt_smooth_l1': 14.672707557678223, 'ch_leftglutt_smooth_l1': 8.572866439819336, 'ch_leftbicep_smooth_l1': 7.49204683303833, 'ch_rightbicep_smooth_l1': 6.625553607940674}
+[Stage2Train] {'step': 275, 'loss_smooth_l1': 9.453141212463379, 'loss_mse': 245.21389770507812, 'loss_mae': 9.938016891479492, 'lr': 9.995708931524637e-05, 'fps_frames_per_sec': 199.0788042609146, 'loss_smooth_l1_norm': 0.18889454007148743, 'ch_rightquad_smooth_l1': 12.977421760559082, 'ch_leftquad_smooth_l1': 6.914170742034912, 'ch_rightham_smooth_l1': 8.951255798339844, 'ch_leftham_smooth_l1': 9.355192184448242, 'ch_rightglutt_smooth_l1': 13.848907470703125, 'ch_leftglutt_smooth_l1': 7.6302690505981445, 'ch_leftbicep_smooth_l1': 7.69057559967041, 'ch_rightbicep_smooth_l1': 8.257330894470215}
+[Stage2Train] {'step': 300, 'loss_smooth_l1': 9.111164093017578, 'loss_mse': 269.08538818359375, 'loss_mae': 9.591315269470215, 'lr': 9.994893424825063e-05, 'fps_frames_per_sec': 199.9497872194542, 'loss_smooth_l1_norm': 0.21079574525356293, 'ch_rightquad_smooth_l1': 11.28380012512207, 'ch_leftquad_smooth_l1': 9.446329116821289, 'ch_rightham_smooth_l1': 8.107375144958496, 'ch_leftham_smooth_l1': 6.790737628936768, 'ch_rightglutt_smooth_l1': 12.88779354095459, 'ch_leftglutt_smooth_l1': 9.712014198303223, 'ch_leftbicep_smooth_l1': 7.596344470977783, 'ch_rightbicep_smooth_l1': 7.064910411834717}
+[Stage2Train] {'step': 325, 'loss_smooth_l1': 9.048357009887695, 'loss_mse': 299.4371337890625, 'loss_mae': 9.528724670410156, 'lr': 9.994007059184722e-05, 'fps_frames_per_sec': 197.65466441791443, 'loss_smooth_l1_norm': 0.18532060086727142, 'ch_rightquad_smooth_l1': 14.63340950012207, 'ch_leftquad_smooth_l1': 6.784076690673828, 'ch_rightham_smooth_l1': 6.806222915649414, 'ch_leftham_smooth_l1': 6.53095006942749, 'ch_rightglutt_smooth_l1': 16.349712371826172, 'ch_leftglutt_smooth_l1': 8.92248821258545, 'ch_leftbicep_smooth_l1': 6.3658013343811035, 'ch_rightbicep_smooth_l1': 5.994186878204346}
+[Stage2Train] {'step': 350, 'loss_smooth_l1': 8.83655834197998, 'loss_mse': 275.2389831542969, 'loss_mae': 9.318062782287598, 'lr': 9.993049848272474e-05, 'fps_frames_per_sec': 198.59366264588832, 'loss_smooth_l1_norm': 0.19179661571979523, 'ch_rightquad_smooth_l1': 12.08953857421875, 'ch_leftquad_smooth_l1': 7.305034160614014, 'ch_rightham_smooth_l1': 8.343565940856934, 'ch_leftham_smooth_l1': 6.557892799377441, 'ch_rightglutt_smooth_l1': 12.450047492980957, 'ch_leftglutt_smooth_l1': 8.858773231506348, 'ch_leftbicep_smooth_l1': 7.9263410568237305, 'ch_rightbicep_smooth_l1': 7.161271572113037}
+[Stage2Train] {'step': 375, 'loss_smooth_l1': 8.384653091430664, 'loss_mse': 256.8231201171875, 'loss_mae': 8.866066932678223, 'lr': 9.992021806849695e-05, 'fps_frames_per_sec': 199.41833537464447, 'loss_smooth_l1_norm': 0.15648925304412842, 'ch_rightquad_smooth_l1': 10.989307403564453, 'ch_leftquad_smooth_l1': 6.349337100982666, 'ch_rightham_smooth_l1': 8.516616821289062, 'ch_leftham_smooth_l1': 7.029442310333252, 'ch_rightglutt_smooth_l1': 12.570351600646973, 'ch_leftglutt_smooth_l1': 6.319118976593018, 'ch_leftbicep_smooth_l1': 8.833949089050293, 'ch_rightbicep_smooth_l1': 6.469101428985596}
+[Stage2Train] {'step': 400, 'loss_smooth_l1': 9.05228328704834, 'loss_mse': 340.669189453125, 'loss_mae': 9.533284187316895, 'lr': 9.990922950770055e-05, 'fps_frames_per_sec': 200.15641808338924, 'loss_smooth_l1_norm': 0.195053368806839, 'ch_rightquad_smooth_l1': 11.405878067016602, 'ch_leftquad_smooth_l1': 7.2612409591674805, 'ch_rightham_smooth_l1': 8.424172401428223, 'ch_leftham_smooth_l1': 6.489395618438721, 'ch_rightglutt_smooth_l1': 14.17050838470459, 'ch_leftglutt_smooth_l1': 7.484753608703613, 'ch_leftbicep_smooth_l1': 9.798863410949707, 'ch_rightbicep_smooth_l1': 7.3834452629089355}
+[Checkpoint] saved best (val_rmse=16.907328) -> /data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/stage2_with_clip5temp_cond/best.pt
+[Stage2Val] {'step': 400, 'val_smooth_l1': 8.816897213291162, 'val_rmse': 16.907327593322865, 'best_val_rmse': 16.907327593322865}

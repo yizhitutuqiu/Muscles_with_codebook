@@ -1,0 +1,32 @@
+project: "MIA Temporal Tokenization Alignment"
+question: "如何在确认 Stage 1 使用 clip_5 且 Stage 2 使用 full 预测模式最优的前提下，进一步优化 Stage 2 的网络架构或超参数，使得在 no_cond（无身份条件）情况下的平均 RMSE 误差从 10.67 降低至 9-10 之间？"
+status: "iterating"
+current_direction: "监控 batch_stage2_h5 在 tmux 中的运行状态。根据生成的 summary.csv 结果，评估底层架构重构的科学价值和 RMSE 改进情况。"
+active_hypothesis: "H5"
+metrics:
+  primary: "stage2_no_cond_mean_error"
+  secondary: ["reconstruction_loss", "codebook_usage"]
+baselines:
+  stage2_no_cond_mean_error: 10.56  # 对应最近一次有效评估记录
+  reconstruction_loss: null
+hypotheses:
+  H1:
+    description: "通过将自适应平均池化替换为 1x1 卷积的 token 扩展（frame_tokens pool），并在 Stage 2 中使用对齐的时序 token 作为输入，可以提升模型对特征序列的表达能力，进而有望降低 no_cond 情况下的生成误差至 10 以下。"
+    status: "refuted"
+    metric_prediction: "stage2_no_cond_mean_error < 10.0"
+  H2:
+    description: "在 no_cond 设定下，模型缺乏身份信息辅助。通过加深时序建模骨干（DSTFormer层数增加）、调整连续特征编码器（使用 Mixer 替代 Joint_25 以捕捉全局空间关联）或增加正则化，能迫使模型学到更具通用性的纯运动到肌肉映射，从而突破 10.67 的瓶颈。"
+    status: "refuted" # 经用户反馈目前实验效果虽比之前差，但提供了良好的 baseline 方向。
+    metric_prediction: "stage2_no_cond_mean_error < 10.0"
+  H3:
+    description: "通过批量消融实验搜索模型结构，包括：修改连续特征提取器为 Mixer (提取全局拓扑)、进一步加深时序网络 (DST=8层)、降低 Dropout 防欠拟合、使用对称 Fusion 层、及增大 Batch Size (128)。"
+    status: "refuted"
+    metric_prediction: "其中某组配置能在 no_cond 下将 mean_error 降至 9.0~10.0 之间。"
+  H4:
+    description: "通过给无条件输入注入 Implicit Bias (隐式偏差) 来提升 nocond 泛化。"
+    status: "refuted"
+    metric_prediction: "被用户明确拒绝，认为是“投机取巧”，没有科研价值。"
+  H5:
+    description: "从网络架构底层着手，增强空间与时间的归纳偏置：1. 在 DSTFormer 中引入旋转位置编码 (RoPE) 和局部时序卷积 (LTC) ；2. 为离散 Token 引入时空位置编码，稳定 DCSA 的对齐过程。"
+    status: "pending"
+    metric_prediction: "已完成 H5 架构的开发，批量消融实验 (batch_stage2_h5) 正在运行中。"
