@@ -215,23 +215,29 @@ class Stage2Pose2EMG(nn.Module):
                 f"Expected 75 (per-frame), {expected_clip_dim} (frame-aligned clip={t}*75), "
                 f"or clip_len*75 with token_count=1 (unified clip-level codebook)."
             )
-        if stage1_token_count % int(t) != 0:
-            raise ValueError(f"Stage1 token_count={stage1_token_count} not divisible by T={t}")
-        tokens_per_frame = stage1_token_count // int(t)
-        if tokens_per_frame != int(self.cfg.token_count):
-            raise ValueError(
-                f"Stage1 tokens_per_frame={tokens_per_frame} != Stage2 token_count={int(self.cfg.token_count)}. "
-                "For frame-aligned temporal codebook, Stage2 token_count must equal Stage1 token_count/T."
-            )
-
+            
         x_clip = joints3d.reshape(b, expected_clip_dim)
         x_n = mod.normalize(x_clip.float(), update=False)
         z_e = mod.encoder(x_n).view(b, stage1_token_count, stage1_code_dim)
         z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
         z_q = z_q.view(b, stage1_token_count, stage1_code_dim)
         idx = idx.view(b, stage1_token_count)
-        z_q_bt = z_q.view(b, t, tokens_per_frame, stage1_code_dim)
-        idx_bt = idx.view(b, t, tokens_per_frame)
+        
+        if stage1_token_count % int(t) != 0 and stage1_token_count != 1:
+            # For CIF or other variable length token counts, we broadcast the global tokens to all frames
+            tokens_per_frame = stage1_token_count
+            z_q_bt = z_q.unsqueeze(1).expand(b, t, tokens_per_frame, stage1_code_dim)
+            idx_bt = idx.unsqueeze(1).expand(b, t, tokens_per_frame)
+        else:
+            tokens_per_frame = stage1_token_count // int(t)
+            if tokens_per_frame != int(self.cfg.token_count):
+                raise ValueError(
+                    f"Stage1 tokens_per_frame={tokens_per_frame} != Stage2 token_count={int(self.cfg.token_count)}. "
+                    "For frame-aligned temporal codebook, Stage2 token_count must equal Stage1 token_count/T."
+                )
+            z_q_bt = z_q.view(b, t, tokens_per_frame, stage1_code_dim)
+            idx_bt = idx.view(b, t, tokens_per_frame)
+
         z_q_clip_flat = z_q.reshape(b, stage1_token_count * stage1_code_dim)
         return z_q_bt, idx_bt, z_q_clip_flat
 

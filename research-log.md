@@ -31,3 +31,17 @@
   1. **设备不匹配 (Device Mismatch)**：修复了官方模型前向传播中硬编码 `torch.cuda.FloatTensor` 导致的在指定 GPU 设备上报错的问题。
   2. **路径丢失 (No eval cases found)**：修正了 `Mia_style_eval.py` 中 `id_exercises` 对应的 `ablation_dir` 绝对路径。
   3. **结果完全相同 (Identical Results Bug)**：发现虽然 `batch_Mia_style_eval.py` 生成了独立的评测指令，但由于未在生成的临时 YAML 中完整显式地覆盖 `methods.stage2.checkpoint` 字典结构，导致 `Mia_style_eval.py` 内部回退（Fallback）去读取了默认的 `eval.yaml`，从而所有的评测实际上都在测试同一个写死的老 checkpoint (`stage2_with_clip5temp_cond`)。修复：通过 `copy.deepcopy` 和完整显式地注入字典参数，成功切断了回退逻辑。
+
+## H6 (结构分支优化) 与 Stage 1 软切分 (CIF)
+**日期:** 2026-04-24
+**动作:** 基于 H5 成功的基础上，引入 ST-GCN 与 Kinematic-driven MoE，并在 Stage 1 引入 CIF
+
+- **H6 实验结果分析**：
+  - H6-B (引入 ST-GCN)：Average RMSE 11.34，性能退化。说明对 Stage 2 的连续信号直接引入图卷积在当前设定下带来了负面影响。
+  - H6-BC (ST-GCN + MoE)：Average RMSE 11.32，性能退化。
+  - H6-C (仅引入 MoE)：Average RMSE 10.39，性能显著提升，超越了 H5 的 10.49。Token 级别的混合专家系统展现了根据骨骼节点动态分配计算资源的巨大优势。
+- **Stage 1 软切分 (CIF)**：
+  - 成功实现了基于语音识别思想的 CIF 机制。
+  - 训练结果表明：重构误差 (RMSE) 降至 17.20，且 Codebook 的激活率非常高（`j3d_active_rate`: 83.9%, `emg_active_rate`: 41.0%）。
+- **后续计划 (H7)**：
+  - 既然 H6-C 的 MoE 展现了最优性能，而 CIF 的 Stage 1 Codebook 也取得了优异的训练效果，决定启动 H7 实验：将 Stage 1 CIF Codebook 对接到表现最好的 H6-C MoE Stage 2 模型中，期待进一步降低误差。

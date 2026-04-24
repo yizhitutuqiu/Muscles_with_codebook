@@ -178,6 +178,15 @@ class _ModalityAE(nn.Module):
                 code_dim=int(cfg.code_dim),
                 temporal=cfg.temporal,
             )
+        if encoder_type in ("cif", "temporal_cif"):
+            from .cif_temporal import CIFTemporalEncoder
+            return CIFTemporalEncoder(
+                in_dim=int(cfg.in_dim),
+                hidden_dim=int(cfg.hidden_dim),
+                token_count=int(cfg.token_count),
+                code_dim=int(cfg.code_dim),
+                temporal=cfg.temporal,
+            )
         if encoder_type in ("mixer_tcn", "mixer+tcn"):
             mix_d = cfg.mixer or {}
             mix_tc = int(mix_d.get("token_count", cfg.token_count))
@@ -268,6 +277,14 @@ class _ModalityAE(nn.Module):
             return ClipUnifiedTCNDecoder(
                 out_dim=int(cfg.in_dim),
                 hidden_dim=int(cfg.hidden_dim),
+                code_dim=int(cfg.code_dim),
+                temporal=cfg.temporal,
+            )
+        if decoder_type in ("cif", "temporal_cif"):
+            from .cif_temporal import CIFTemporalDecoder
+            return CIFTemporalDecoder(
+                out_dim=int(cfg.in_dim),
+                token_count=int(cfg.token_count),
                 code_dim=int(cfg.code_dim),
                 temporal=cfg.temporal,
             )

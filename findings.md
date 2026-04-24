@@ -28,4 +28,17 @@
 - **架构重构 (H5)**:
   - **离散 Token 时空编码注入**: 在 `stage2_pose2emg.py` 中，显式为 `z_disc` 注入与连续特征 `z_cont` 匹配的 `spatial_pe` 和 `temporal_pe`，为注意力计算提供强有力的空间和时间锚点，使其不再是一袋无序向量。
   - **增强型时空提取器 (DSTFormerV2)**: 引入了 `dstformer_v2.py`。在时间注意力分支中加入了 **旋转位置编码 (RoPE)** 以增强长序列的相对顺序建模；在时间 FFN 分支中引入了 **局部时序卷积 (LTC - Local Temporal Convolution)** 和 **SwiGLU 门控机制**，强制模型学习 EMG 连续信号的局部平滑性，并提升特征筛选能力。
-- **批量消融**: 我们利用 `batch_train.stage2.yaml` 开启了 4 个并行的 GPU 实验 (包含 `H5 Full`, `H5 w/o LTC`, `H5 w/o RoPE`, 以及 `H2 Baseline`)，验证这些底层改动对降低 `no_cond` 误差的科学价值。
+- **批量消融**: 我们利用 `batch_train.stage2.yaml` 开启了 4 个并行的 GPU 实验 (包含 `H5 Full`, `H5 w/o LTC`, `H5 w/o RoPE`, 以及 `H2 Baseline`)，验证这些底层改动对降低 `no_cond` 误差的科学价值。最终，H5 架构在无条件设定下取得了 **10.49** 的平均 RMSE，成功超越了官方带有身份条件的模型 (10.55)。
+
+### 阶段 5：从结构分支入手 (H6) 与 Stage 1 软切分 (CIF)
+- **挑战**: H5 虽然突破了官方瓶颈，但要进一步向 9 逼近，需要在不破坏现有稳定性的前提下，增强特定维度的表征能力（如骨架图结构、运动学驱动的特征路由）。
+- **架构重构 (H6)**:
+  - **H6-B (ST-GCN)**: 在 Stage 2 的连续信号（3D 骨架）输入端，引入时空图卷积网络 (ST-GCN)，提取具备物理拓扑先验的连续 Query 特征。
+  - **H6-C (Kinematic-driven MoE)**: 在 DSTFormer 的空间/时间 FFN 后融合阶段，引入 Token 级别的稠密/软路由混合专家系统 (MoE)。通过 4 个专家网络，模型能根据不同骨骼节点在不同时间步的运动学状态，动态分配计算资源。
+- **H6 实验结果**: 
+  - `exp_h6_b_stgcn`: Average RMSE 11.34 (性能退化)
+  - `exp_h6_bc_full`: Average RMSE 11.32 (性能退化)
+  - `exp_h6_c_moe`: Average RMSE **10.39** (性能进一步提升，确立为当前最优结构)
+- **Stage 1 软切分 (CIF)**:
+  - **动机**: 传统的固定长度/频率的 TCN 或自适应池化切分方式，无法自适应不同运动速度和复杂度的语义边界。
+  - **实现**: 借鉴语音识别中的 Continuous Integrate-and-Fire (CIF) 机制，实现变长的“语义软切分”。训练后，Stage 1 的重构误差 (RMSE) 降至 **17.20**，且 `j3d_active_rate` 达到 83.9%，`emg_active_rate` 达到 41.0%，表明 Codebook 得到了非常健康和充分的利用。
