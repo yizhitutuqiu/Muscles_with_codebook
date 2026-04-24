@@ -24,8 +24,13 @@ def main():
     if not batch_dir.exists() or not batch_dir.is_dir():
         raise FileNotFoundError(f"Batch directory not found: {batch_dir}")
 
-    # Find all experiment directories in the batch dir
-    exp_dirs = [d for d in batch_dir.iterdir() if d.is_dir() and (d / "best.pt").exists()]
+    # Check if the provided directory itself is an experiment directory
+    if (batch_dir / "best.pt").exists():
+        exp_dirs = [batch_dir]
+    else:
+        # Find all experiment directories in the batch dir
+        exp_dirs = [d for d in batch_dir.iterdir() if d.is_dir() and (d / "best.pt").exists()]
+        
     if not exp_dirs:
         print(f"No valid experiment directories with best.pt found in {batch_dir}")
         return
