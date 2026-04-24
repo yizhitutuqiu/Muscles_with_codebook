@@ -379,6 +379,10 @@ def _run_training(
     temporal_type = str(model_cfg.get("temporal_type", "dstformer")).strip().lower()
     dcsa_cfg = DCSAConfig(**(model_cfg.get("dcsa", {}) or {}))
     dst_cfg = DSTFormerConfig(**(model_cfg.get("dst", {}) or {}))
+    from custom.stage2.models.dstformer_v2 import DSTFormerV2Config
+    dst_v2_cfg = DSTFormerV2Config(**(model_cfg.get("dst_v2", {}) or {}))
+    from custom.stage2.models.dstformer_v3_moe import DSTFormerV3MoEConfig
+    dst_v3_moe_cfg = DSTFormerV3MoEConfig(**(model_cfg.get("dst_v3_moe", {}) or {}))
     dim = int(model_cfg.get("dim", 256))
     residual_add_cfg = None
     if fusion_type in ("residual_add", "residual", "add"):
@@ -402,6 +406,8 @@ def _run_training(
         fusion_residual_add=residual_add_cfg,
         temporal_type=temporal_type,
         dst=dst_cfg,
+        dst_v2=dst_v2_cfg,
+        dst_v3_moe=dst_v3_moe_cfg,
         tcn=tcn_cfg,
         emg_head_type=str(model_cfg.get("emg_head_type", "mixer")).strip().lower(),
         emg_hidden=int(model_cfg.get("emg_hidden", 256)),

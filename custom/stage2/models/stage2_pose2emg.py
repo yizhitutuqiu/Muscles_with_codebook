@@ -15,6 +15,7 @@ from .fusion import ResidualAddConfig, build_fusion
 from .temporal_backbone import TCNBackboneConfig, build_temporal_backbone
 from .dstformer import DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2Config
+from .dstformer_v3_moe import DSTFormerV3MoEConfig
 
 
 # 关节点数，与 joints3d (B,T,25,3) 一致
@@ -33,10 +34,11 @@ class Stage2Pose2EMGConfig:
     fusion_type: str = "dcsa"
     dcsa: DCSAConfig = DCSAConfig()
     fusion_residual_add: Optional[ResidualAddConfig] = None
-    # 可插拔融合后时序：dstformer | dstformer_v2 | tcn
+    # 可插拔融合后时序：dstformer | dstformer_v2 | dstformer_v3_moe | tcn
     temporal_type: str = "dstformer"
     dst: DSTFormerConfig = DSTFormerConfig()
     dst_v2: Optional[DSTFormerV2Config] = None
+    dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None
     tcn: Optional[TCNBackboneConfig] = None
     # EMG 头：对 N 个 token 做融合后映射到 8 维。mixer=Stage1 式 Mixer（推荐）/ flatten=展平+Linear
     emg_head_type: str = "mixer"
@@ -86,6 +88,23 @@ class Stage2Pose2EMG(nn.Module):
             self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
             nn.init.normal_(self.spatial_pe, std=0.02)
             nn.init.normal_(self.temporal_pe, std=0.02)
+        elif cont_type == "stgcn":
+            # H6-B: ST-GCN continuous encoder
+            from .st_gcn import AdaptiveGCNEncoder
+            self.cont_encoder = AdaptiveGCNEncoder(
+                in_channels=3, 
+                hidden_dim=int(cfg.cont_joint_hidden_dim), 
+                out_dim=dim, 
+                num_nodes=NUM_JOINTS, 
+                num_layers=3
+            )
+            self._cont_token_count = NUM_JOINTS
+            # 时空位置编码
+            max_t = int(getattr(cfg, "max_seq_len", 256))
+            self.spatial_pe = nn.Parameter(torch.empty(1, 1, NUM_JOINTS, dim))
+            self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
+            nn.init.normal_(self.spatial_pe, std=0.02)
+            nn.init.normal_(self.temporal_pe, std=0.02)
         else:
             self.spatial_pe = None
             self.temporal_pe = None
@@ -100,7 +119,7 @@ class Stage2Pose2EMG(nn.Module):
             self._cont_token_count = int(cfg.token_count)
 
         fused_token_count = self._cont_token_count if (
-            cont_type == "joint_25" and str(cfg.fusion_type).strip().lower() in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa")
+            cont_type in ("joint_25", "stgcn") and str(cfg.fusion_type).strip().lower() in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa")
         ) else int(cfg.token_count)
 
         # H5: 离散 Token 同样需要时空位置编码，否则 DCSA 无法在 nocond 下进行稳定的空间对齐
@@ -121,6 +140,7 @@ class Stage2Pose2EMG(nn.Module):
             dim,
             dst_cfg=cfg.dst,
             dst_v2=cfg.dst_v2,
+            dst_v3_moe=cfg.dst_v3_moe,
             tcn_cfg=cfg.tcn,
         )
 
@@ -234,7 +254,8 @@ class Stage2Pose2EMG(nn.Module):
 
         # Branch B: continuous tokens
         n_cont = self._cont_token_count
-        if n_cont == NUM_JOINTS:
+        cont_type = str(self.cfg.cont_encoder_type).strip().lower()
+        if cont_type in ("stgcn", "joint_25"):
             x_joints = x_flat.view(b * t, NUM_JOINTS, 3)
             z_cont = self.cont_encoder(x_joints)
         else:

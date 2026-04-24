@@ -16,6 +16,7 @@ import torch.nn as nn
 
 from .dstformer import DSTFormer, DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2, DSTFormerV2Config
+from .dstformer_v3_moe import DSTFormerV3MoE, DSTFormerV3MoEConfig
 
 
 @dataclass(frozen=True)
@@ -117,12 +118,28 @@ class DSTFormerV2TemporalBackbone(nn.Module):
         return self.dst(x)
 
 
+class DSTFormerV3MoETemporalBackbone(nn.Module):
+    """
+    DSTFormerV3MoE (H6-C): Kinematic-driven Mixture of Experts to route different spatial/temporal parts 
+    without relying on explicit condition.
+    """
+    def __init__(self, cfg: DSTFormerV3MoEConfig):
+        super().__init__()
+        self.dst = DSTFormerV3MoE(cfg)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B, T, N, C) -> 输出 (B, T, N, C)
+        """
+        return self.dst(x)
+
 def build_temporal_backbone(
     temporal_type: str,
     dim: int,
     *,
     dst_cfg: Optional[DSTFormerConfig] = None,
     dst_v2: Optional[DSTFormerV2Config] = None,
+    dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None,
     tcn_cfg: Optional[TCNBackboneConfig] = None,
     **kwargs: Any,
 ) -> nn.Module:
@@ -147,6 +164,17 @@ def build_temporal_backbone(
         cfg_dict.update({k: v for k, v in kwargs.items() if k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc")})
         cfg = DSTFormerV2Config(**cfg_dict)
         return DSTFormerV2TemporalBackbone(cfg)
+    if temporal_type in ("dstformer_v3_moe", "dst_v3_moe", "h6"):
+        cfg_dict = {"dim": dim}
+        if dst_cfg is not None:
+            for k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers"):
+                if hasattr(dst_cfg, k): cfg_dict[k] = getattr(dst_cfg, k)
+        if dst_v3_moe is not None:
+            for k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc", "num_experts"):
+                if hasattr(dst_v3_moe, k): cfg_dict[k] = getattr(dst_v3_moe, k)
+        cfg_dict.update({k: v for k, v in kwargs.items() if k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc", "num_experts")})
+        cfg = DSTFormerV3MoEConfig(**cfg_dict)
+        return DSTFormerV3MoETemporalBackbone(cfg)
     if temporal_type == "tcn":
         cfg = tcn_cfg or TCNBackboneConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("hidden_dim", "kernel_size", "num_layers", "dilation_base", "dropout")})
         return TCNTemporalBackbone(cfg)

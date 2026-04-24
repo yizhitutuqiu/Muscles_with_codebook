@@ -1,0 +1,39 @@
+# H6: Kinematic-driven ST-GCN and MoE Ablations
+# This will run 3 experiments to evaluate H6-B, H6-C, and H6-BC combinations
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h6"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h6/summary.csv"
+
+tmux:
+  session_name: "batch_stage2_h6"
+  attach: true
+  fail_if_exists: false
+
+gpus: [4, 5, 6]
+
+experiments:
+  - name: "exp_h6_b_stgcn"
+    model:
+      cont_encoder_type: "stgcn"
+      temporal_type: "dstformer_v2" # use H5's DSTFormerV2 for temporal
+    data:
+      batch_size: 32 # Prevents OOM
+
+  - name: "exp_h6_c_moe"
+    model:
+      cont_encoder_type: "joint_25" # keep H5's encoder
+      temporal_type: "dstformer_v3_moe"
+      dst_v3_moe:
+        num_experts: 4
+    data:
+      batch_size: 32
+
+  - name: "exp_h6_bc_full"
+    model:
+      cont_encoder_type: "stgcn"
+      temporal_type: "dstformer_v3_moe"
+      dst_v3_moe:
+        num_experts: 4
+    data:
+      batch_size: 32
