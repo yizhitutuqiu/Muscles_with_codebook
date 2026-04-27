@@ -1,0 +1,47 @@
+# H7 Experiment: Symmetric DCSA + Dual-Branch MoE DSTFormer Ablations
+# Based on H6 MoE and TCN Clip5 codebook.
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h7_symmetric_dual"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h7_symmetric_dual/summary.csv"
+
+tmux:
+  session_name: "batch_stage2_h7"
+  attach: false
+  fail_if_exists: false
+
+gpus: [4, 5, 6]
+
+experiments:
+  # 1. 只有对称融合 (Symmetric DCSA)，主干用 H6-C 的串行 MoE
+  - name: "exp_h7_sym_dcsa_only"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v3_moe"
+      dst_v3_moe:
+        num_experts: 4
+    data:
+      batch_size: 32
+
+  # 2. 只有双分支主干 (Dual-Branch MoE)，融合用 H6-C 的非对称 DCSA
+  - name: "exp_h7_dual_branch_only"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "dcsa_asymmetric"
+      temporal_type: "dstformer_v4_dual_moe"
+      dst_v4_dual_moe:
+        num_experts: 4
+    data:
+      batch_size: 32
+
+  # 3. Full: 对称融合 + 双分支主干
+  - name: "exp_h7_full_sym_dual"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v4_dual_moe"
+      dst_v4_dual_moe:
+        num_experts: 4
+    data:
+      batch_size: 32

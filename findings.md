@@ -41,4 +41,4 @@
   - `exp_h6_c_moe`: Average RMSE **10.39** (性能进一步提升，确立为当前最优结构)
 - **Stage 1 软切分 (CIF)**:
   - **动机**: 传统的固定长度/频率的 TCN 或自适应池化切分方式，无法自适应不同运动速度和复杂度的语义边界。
-  - **实现**: 借鉴语音识别中的 Continuous Integrate-and-Fire (CIF) 机制，实现变长的“语义软切分”。训练后，Stage 1 的重构误差 (RMSE) 降至 **17.20**，且 `j3d_active_rate` 达到 83.9%，`emg_active_rate` 达到 41.0%，表明 Codebook 得到了非常健康和充分的利用。
+  - **实现**: 借鉴语音识别中的 Contin uous Integrate-and-Fire (CIF) 机制，实现变长的“语义软切分”。训练后，Stage 1 的重构误差 (RMSE) 降至 **17.20**，且 `j3d_active_rate` 达到 83.9%，`emg_active_rate` 达到 41.0%，表明 Codebook 得到了非常健康和充分的利用。

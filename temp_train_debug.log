@@ -1,0 +1,35 @@
+/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/cuda/__init__.py:619: UserWarning: Can't initialize NVML
+  warnings.warn("Can't initialize NVML")
+/data/litengmo/.config/matplotlib is not a writable directory
+Matplotlib created a temporary cache directory at /tmp/matplotlib-_o_10kqm because there was an issue with the default path (/data/litengmo/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+File count: 19563
+File count: 4777
+Traceback (most recent call last):
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 880, in <module>
+    main()
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 869, in main
+    _run_training(
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 370, in _run_training
+    stage1 = _build_stage1_from_ckpt(stage1_ckpt, device=device)
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 219, in _build_stage1_from_ckpt
+    m = FrameCodebookModel(stage1_cfg).to(device)
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1173, in to
+    return self._apply(convert)
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/nn/modules/module.py", line 779, in _apply
+    module._apply(fn)
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/nn/modules/module.py", line 853, in _apply
+    self._buffers[key] = fn(buf)
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1159, in convert
+    return t.to(
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/site-packages/torch/cuda/__init__.py", line 293, in _lazy_init
+    torch._C._cuda_init()
+RuntimeError: No CUDA GPUs are available
+[Batch] Running case: exp_h7_dual_branch_only on cuda
+Traceback (most recent call last):
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/batch_train_stage2.py", line 210, in <module>
+    main()
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/batch_train_stage2.py", line 196, in main
+    subprocess.run(cmd, check=True)
+  File "/data/litengmo/anaconda3/envs/gvhmr/lib/python3.10/subprocess.py", line 526, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python', 'custom/stage2/train/train_stage2_pose2emg.py', '--config', '/data/litengmo/HSMR/mia_custom/custom/stage2/configs/temp_run_stage2_exp_h7_dual_branch_only.yaml', '--device', 'cuda']' returned non-zero exit status 1.

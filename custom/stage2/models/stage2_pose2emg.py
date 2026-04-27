@@ -16,6 +16,7 @@ from .temporal_backbone import TCNBackboneConfig, build_temporal_backbone
 from .dstformer import DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2Config
 from .dstformer_v3_moe import DSTFormerV3MoEConfig
+from .dstformer_v4_dual_moe import DSTFormerV4DualMoEConfig
 
 
 # 关节点数，与 joints3d (B,T,25,3) 一致
@@ -34,11 +35,12 @@ class Stage2Pose2EMGConfig:
     fusion_type: str = "dcsa"
     dcsa: DCSAConfig = DCSAConfig()
     fusion_residual_add: Optional[ResidualAddConfig] = None
-    # 可插拔融合后时序：dstformer | dstformer_v2 | dstformer_v3_moe | tcn
+    # 可插拔融合后时序：dstformer | dstformer_v2 | dstformer_v3_moe | dstformer_v4_dual_moe | tcn
     temporal_type: str = "dstformer"
     dst: DSTFormerConfig = DSTFormerConfig()
     dst_v2: Optional[DSTFormerV2Config] = None
     dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None
+    dst_v4_dual_moe: Optional[DSTFormerV4DualMoEConfig] = None
     tcn: Optional[TCNBackboneConfig] = None
     # EMG 头：对 N 个 token 做融合后映射到 8 维。mixer=Stage1 式 Mixer（推荐）/ flatten=展平+Linear
     emg_head_type: str = "mixer"
@@ -118,9 +120,13 @@ class Stage2Pose2EMG(nn.Module):
             self.cont_encoder = FourLayerMLPMixer(mixer_cfg)
             self._cont_token_count = int(cfg.token_count)
 
-        fused_token_count = self._cont_token_count if (
-            cont_type in ("joint_25", "stgcn") and str(cfg.fusion_type).strip().lower() in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa")
-        ) else int(cfg.token_count)
+        fusion_type_str = str(cfg.fusion_type).strip().lower()
+        if fusion_type_str in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa"):
+            fused_token_count = self._cont_token_count
+        elif fusion_type_str in ("dcsa_symmetric", "dcsa_sym", "symmetric_dcsa"):
+            fused_token_count = self._cont_token_count + int(cfg.token_count)
+        else:
+            fused_token_count = int(cfg.token_count)
 
         # H5: 离散 Token 同样需要时空位置编码，否则 DCSA 无法在 nocond 下进行稳定的空间对齐
         max_t = int(getattr(cfg, "max_seq_len", 256))
@@ -137,10 +143,11 @@ class Stage2Pose2EMG(nn.Module):
         )
         self.temporal = build_temporal_backbone(
             cfg.temporal_type,
-            dim,
+            dim=dim,
             dst_cfg=cfg.dst,
             dst_v2=cfg.dst_v2,
             dst_v3_moe=cfg.dst_v3_moe,
+            dst_v4_dual_moe=cfg.dst_v4_dual_moe,
             tcn_cfg=cfg.tcn,
         )
 

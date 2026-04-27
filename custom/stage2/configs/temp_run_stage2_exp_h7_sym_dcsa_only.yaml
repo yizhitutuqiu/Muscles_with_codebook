@@ -1,8 +1,8 @@
 experiment:
-  name: exp_batch_128
+  name: exp_h7_sym_dcsa_only
   seed: 42
 runtime:
-  device: cuda:0
+  device: cuda
   num_workers: 8
   log_every: 25
   max_steps: 20000
@@ -22,7 +22,7 @@ optimizer:
   lr_min: 8.0e-06
 data:
   split: train
-  batch_size: 128
+  batch_size: 32
   step: 30
   joints3d_root_center: true
   joints3d_root_index: 8
@@ -39,7 +39,7 @@ data:
 stage1:
   checkpoint: custom/checkpoints/batch_codebook/clip_5_code_256/best.pt
 checkpoints:
-  dir: custom/stage2/checkpoints/batch_stage2/exp_batch_128
+  dir: custom/stage2/checkpoints/batch_stage2_h7_symmetric_dual/exp_h7_sym_dcsa_only
 model:
   use_cond: false
   token_count: 1
@@ -47,7 +47,7 @@ model:
   cont_encoder_type: joint_25
   cont_hidden_dim: 1024
   cont_joint_hidden_dim: 128
-  fusion_type: dcsa_asymmetric
+  fusion_type: symmetric_dcsa
   dcsa:
     dim: 256
     num_heads: 8
@@ -56,7 +56,7 @@ model:
     dim: 256
     num_heads: 8
     dropout: 0.2
-  temporal_type: dstformer
+  temporal_type: dstformer_v3_moe
   dst:
     dim: 256
     num_heads: 8
@@ -70,4 +70,6 @@ model:
   emg_mixer_num_layers: 4
   emg_pred_mode: full
   max_seq_len: 256
-name: exp_batch_128
+  dst_v3_moe:
+    num_experts: 4
+name: exp_h7_sym_dcsa_only

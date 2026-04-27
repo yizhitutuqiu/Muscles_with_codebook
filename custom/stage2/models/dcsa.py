@@ -96,3 +96,68 @@ class AsymmetricDCSA(nn.Module):
         out = out.reshape(b, t, nq, c)
         return self.norm(cont + self.drop(out))
 
+
+class SymmetricDCSA(nn.Module):
+    """
+    双向对称 DCSA（参考标准对齐流程）：
+    1. 统一投影到共享隐空间
+    2. 分别做双向交叉注意力 (Cont->Disc 和 Disc->Cont)
+    3. 反向投影回各自原始维度
+    4. 残差融合
+    最后将两路特征在 Token 维度拼接 (Concat)，形成 (B, T, N_cont + N_disc, C) 送入后续处理。
+    """
+    def __init__(self, cfg: DCSAConfig):
+        super().__init__()
+        self.cfg = cfg
+        d_model = int(cfg.dim)
+        
+        # Step 1: 投影到共享隐空间 (尽管目前维度都是 dim，但加上投影层更符合理论推导并增加表达能力)
+        self.proj_in_s = nn.Linear(d_model, d_model)
+        self.proj_in_q = nn.Linear(d_model, d_model)
+        
+        # Step 2: 双向 Cross Attention
+        self.attn_c2d = nn.MultiheadAttention(d_model, int(cfg.num_heads), float(cfg.dropout), batch_first=True)
+        self.attn_d2c = nn.MultiheadAttention(d_model, int(cfg.num_heads), float(cfg.dropout), batch_first=True)
+        
+        # Step 3: 反向投影
+        self.proj_out_s = nn.Linear(d_model, d_model)
+        self.proj_out_q = nn.Linear(d_model, d_model)
+        
+        # Step 4: 残差融合使用的 Norm
+        self.norm_s = nn.LayerNorm(d_model)
+        self.norm_q = nn.LayerNorm(d_model)
+        self.drop = nn.Dropout(float(cfg.dropout)) if float(cfg.dropout) > 0 else nn.Identity()
+
+    def forward(self, cont: torch.Tensor, disc: torch.Tensor) -> torch.Tensor:
+        """
+        cont: (B, T, 25, C)
+        disc: (B, T, 63, C)
+        return: (B, T, 88, C) 拼接后的特征
+        """
+        b, t, j, c = cont.shape
+        _, _, n, _ = disc.shape
+        
+        f_s = cont.reshape(b * t, j, c)
+        f_q = disc.reshape(b * t, n, c)
+        
+        # Step 1: 投影
+        f_s_proj = self.proj_in_s(f_s)
+        f_q_proj = self.proj_in_q(f_q)
+        
+        # Step 2: 双向交叉注意力
+        # C -> D (Query=连续骨骼特征, KV=离散Codebook)
+        out_c2d, _ = self.attn_c2d(query=f_s_proj, key=f_q_proj, value=f_q_proj, need_weights=False)
+        # D -> C (Query=离散Codebook, KV=连续骨骼特征)
+        out_d2c, _ = self.attn_d2c(query=f_q_proj, key=f_s_proj, value=f_s_proj, need_weights=False)
+        
+        # Step 3: 反向投影
+        out_s = self.proj_out_s(out_c2d)
+        out_q = self.proj_out_q(out_d2c)
+        
+        # Step 4: 残差融合
+        f_s_out = self.norm_s(f_s + self.drop(out_s)).reshape(b, t, j, c)
+        f_q_out = self.norm_q(f_q + self.drop(out_q)).reshape(b, t, n, c)
+        
+        # 最后，将它们在 Token 维度拼接
+        return torch.cat([f_s_out, f_q_out], dim=2)
+

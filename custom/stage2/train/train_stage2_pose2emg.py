@@ -383,6 +383,8 @@ def _run_training(
     dst_v2_cfg = DSTFormerV2Config(**(model_cfg.get("dst_v2", {}) or {}))
     from custom.stage2.models.dstformer_v3_moe import DSTFormerV3MoEConfig
     dst_v3_moe_cfg = DSTFormerV3MoEConfig(**(model_cfg.get("dst_v3_moe", {}) or {}))
+    from custom.stage2.models.dstformer_v4_dual_moe import DSTFormerV4DualMoEConfig
+    dst_v4_dual_moe_cfg = DSTFormerV4DualMoEConfig(**(model_cfg.get("dst_v4_dual_moe", {}) or {}))
     dim = int(model_cfg.get("dim", 256))
     residual_add_cfg = None
     if fusion_type in ("residual_add", "residual", "add"):
@@ -408,6 +410,7 @@ def _run_training(
         dst=dst_cfg,
         dst_v2=dst_v2_cfg,
         dst_v3_moe=dst_v3_moe_cfg,
+        dst_v4_dual_moe=dst_v4_dual_moe_cfg,
         tcn=tcn_cfg,
         emg_head_type=str(model_cfg.get("emg_head_type", "mixer")).strip().lower(),
         emg_hidden=int(model_cfg.get("emg_hidden", 256)),
@@ -496,8 +499,8 @@ def _run_training(
         if args.ckpt_dir is not None:
             temp_data_dir = (ckpt_dir / "temp_data").resolve()
         else:
-            # Change temp_data_dir to /data/litengmo/tmp/stage2 to prevent out-of-space issues
-            temp_data_dir = Path("/data/litengmo/tmp/stage2").resolve()
+            # Change temp_data_dir to a safe temp directory
+            temp_data_dir = (ckpt_dir / "temp_data").resolve()
         temp_data_dir.mkdir(parents=True, exist_ok=True)
         train_data_paths_file = temp_data_dir / "train_data_paths.txt"
         train_data_paths_handle = open(train_data_paths_file, "a", encoding="utf-8")

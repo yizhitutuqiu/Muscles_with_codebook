@@ -43,7 +43,7 @@
     <text x="215" y="305" class="text">Continuous Spatio-Temporal PE</text>
 
     <rect x="115" y="350" width="200" height="30" class="box" stroke-dasharray="2,2"/>
-    <text x="215" y="370" class="text">Keys (K) &amp; Values (V)</text>
+    <text x="215" y="370" class="text">Queries (Q)</text>
 
     <!-- Lines for Continuous -->
     <path d="M 215 250 L 215 280" class="line"/>
@@ -61,7 +61,7 @@
     <text x="635" y="305" class="text">Discrete Spatio-Temporal PE</text>
 
     <rect x="535" y="350" width="200" height="30" class="box" stroke-dasharray="2,2"/>
-    <text x="635" y="370" class="text">Queries (Q)</text>
+    <text x="635" y="370" class="text">Keys (K) &amp; Values (V)</text>
 
     <!-- Lines for Discrete -->
     <path d="M 635 250 L 635 280" class="line"/>

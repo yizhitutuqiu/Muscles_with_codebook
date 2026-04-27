@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 14, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+[Batch] Running case: exp_h7_dual_branch_only on cpu
+Traceback (most recent call last):
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/batch_train_stage2.py", line 210, in <module>
+    main()
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/batch_train_stage2.py", line 196, in main
+    subprocess.run(cmd, check=True)
+  File "/data/litengmo/anaconda3/lib/python3.11/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['python', 'custom/stage2/train/train_stage2_pose2emg.py', '--config', '/data/litengmo/HSMR/mia_custom/custom/stage2/configs/temp_run_stage2_exp_h7_dual_branch_only.yaml', '--device', 'cpu']' returned non-zero exit status 1.

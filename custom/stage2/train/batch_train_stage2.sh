@@ -122,7 +122,11 @@ done
 
 for ((i=0; i<total_cases; i++)); do
     gi=$((i % num_gpus))
-    gpu_cases[$gi]="${gpu_cases[$gi]} ${case_array[$i]}"
+    if [ -z "${gpu_cases[$gi]}" ]; then
+        gpu_cases[$gi]="${case_array[$i]}"
+    else
+        gpu_cases[$gi]="${gpu_cases[$gi]} ${case_array[$i]}"
+    fi
 done
 
 for ((gi=0; gi<num_gpus; gi++)); do
@@ -142,13 +146,14 @@ else
   echo "conda not found in PATH" >&2
   exit 1
 fi
-echo "[GPU $gpu] cases:${assigned}"
+echo "[GPU $gpu] cases: ${assigned}"
 export CUDA_VISIBLE_DEVICES=$gpu
-for c in${assigned}; do
+for c in ${assigned}; do
   echo ""
   echo "[GPU $gpu] start: \$c"
   tmux pipe-pane -t "$SESSION_NAME:$win_name" "cat > custom/stage2/logs/batch_stage2_\${c}.log"
-  $PYTHON_RUNNER --config "$BATCH_CONFIG" --case "\$c" --device "cuda:0"
+  # IMPORTANT: Do not pass --device "cuda:0" to let train_stage2_pose2emg.py respect CUDA_VISIBLE_DEVICES
+  $PYTHON_RUNNER --config "$BATCH_CONFIG" --case "\$c"
   echo "[GPU $gpu] done: \$c"
 done
 echo "[GPU $gpu] all done"

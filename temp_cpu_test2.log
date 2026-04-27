@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 880, in <module>
+    main()
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 790, in main
+    cfg = _load_yaml(Path(args.config).expanduser().resolve())
+  File "/data/litengmo/HSMR/mia_custom/custom/stage2/train/train_stage2_pose2emg.py", line 63, in _load_yaml
+    with open(path, "r", encoding="utf-8") as f:
+FileNotFoundError: [Errno 2] No such file or directory: '/data/litengmo/HSMR/mia_custom/custom/stage2/configs/temp_run_stage2_exp_h7_dual_branch_only.yaml'

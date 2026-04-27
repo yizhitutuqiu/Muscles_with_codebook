@@ -84,6 +84,10 @@ def build_fusion(
     if fusion_type in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa"):
         cfg = dcsa_cfg or DCSAConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("num_heads", "dropout")})
         return AsymmetricDCSA(cfg)
+    if fusion_type in ("dcsa_symmetric", "dcsa_sym", "symmetric_dcsa"):
+        from .dcsa import SymmetricDCSA
+        cfg = dcsa_cfg or DCSAConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("num_heads", "dropout")})
+        return SymmetricDCSA(cfg)
     if fusion_type in ("residual_add", "residual", "add"):
         cfg = residual_add_cfg or ResidualAddConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("detail_layers", "detail_hidden_ratio", "scale", "dropout")})
         return ResidualAddFusion(cfg)
