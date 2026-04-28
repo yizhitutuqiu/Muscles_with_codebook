@@ -244,6 +244,21 @@ def _render_emg_panel(
     return img
 
 
+def _resize_letterbox(img_bgr: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    h, w = img_bgr.shape[:2]
+    if (w, h) == (target_w, target_h):
+        return img_bgr
+    scale = min(target_w / w, target_h / h)
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    resized = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    x0 = (target_w - new_w) // 2
+    y0 = (target_h - new_h) // 2
+    canvas[y0 : y0 + new_h, x0 : x0 + new_w] = resized
+    return canvas
+
+
 def _write_video_mp4(frames: list[np.ndarray], out_path: Path, fps: int) -> None:
     if not frames:
         raise ValueError("No frames to write")
@@ -309,6 +324,7 @@ def _render_sequence(
     fps: int,
     plot_width: int,
     plot_height: int,
+    mesh_views: str,
 ) -> None:
     cell_frames = _render_sequence_cells(
         renderer=renderer,
@@ -320,6 +336,7 @@ def _render_sequence(
         fps=fps,
         plot_width=plot_width,
         plot_height=plot_height,
+        mesh_views=mesh_views,
     )
     _write_video_mp4(cell_frames, out_mp4, fps=fps)
 
@@ -334,6 +351,7 @@ def _render_sequence_cells(
     fps: int,
     plot_width: int,
     plot_height: int,
+    mesh_views: str,
 ) -> list[np.ndarray]:
     t = gt_emg_norm_8_t.shape[1]
     panel_gt = _render_emg_panel(gt_emg_norm_8_t, plot_width, plot_height, "GT EMG", vmax=1.0)
@@ -345,29 +363,97 @@ def _render_sequence_cells(
     for i in range(t):
         verts = verts_t_v_3[i]
         cam = origcam_t_4[i]
-        gt_img, _ = renderer.render(
-            flag="False",
-            current_path="/tmp/mia_vis_gt",
-            img=background_bgr,
-            verts=verts,
-            emg_values=gt_emg_norm_8_t[:, i],
-            cam=cam,
-            front=True,
-            pred=False,
-        )
-        pred_img, _ = renderer.render(
-            flag="False",
-            current_path="/tmp/mia_vis_pred",
-            img=background_bgr,
-            verts=verts,
-            emg_values=pred_emg_norm_8_t[:, i],
-            cam=cam,
-            front=True,
-            pred=True,
-        )
 
-        gt_row = np.concatenate([gt_img, panel_gt], axis=1)
-        pred_row = np.concatenate([pred_img, panel_pred], axis=1)
+        if mesh_views == "front":
+            gt_mesh, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_gt",
+                img=background_bgr,
+                verts=verts,
+                emg_values=gt_emg_norm_8_t[:, i],
+                cam=cam,
+                front=True,
+                pred=False,
+            )
+            pred_mesh, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_pred",
+                img=background_bgr,
+                verts=verts,
+                emg_values=pred_emg_norm_8_t[:, i],
+                cam=cam,
+                front=True,
+                pred=True,
+            )
+        elif mesh_views == "back":
+            gt_mesh, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_gt",
+                img=background_bgr,
+                verts=verts,
+                emg_values=gt_emg_norm_8_t[:, i],
+                cam=cam,
+                front=False,
+                pred=False,
+            )
+            pred_mesh, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_pred",
+                img=background_bgr,
+                verts=verts,
+                emg_values=pred_emg_norm_8_t[:, i],
+                cam=cam,
+                front=False,
+                pred=True,
+            )
+        elif mesh_views == "both":
+            gt_front, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_gt",
+                img=background_bgr,
+                verts=verts,
+                emg_values=gt_emg_norm_8_t[:, i],
+                cam=cam,
+                front=True,
+                pred=False,
+            )
+            gt_back, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_gt",
+                img=background_bgr,
+                verts=verts,
+                emg_values=gt_emg_norm_8_t[:, i],
+                cam=cam,
+                front=False,
+                pred=False,
+            )
+            pred_front, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_pred",
+                img=background_bgr,
+                verts=verts,
+                emg_values=pred_emg_norm_8_t[:, i],
+                cam=cam,
+                front=True,
+                pred=True,
+            )
+            pred_back, _ = renderer.render(
+                flag="False",
+                current_path="/tmp/mia_vis_pred",
+                img=background_bgr,
+                verts=verts,
+                emg_values=pred_emg_norm_8_t[:, i],
+                cam=cam,
+                front=False,
+                pred=True,
+            )
+            gt_mesh = np.concatenate([gt_front, gt_back], axis=1)
+            pred_mesh = np.concatenate([pred_front, pred_back], axis=1)
+        else:
+            raise ValueError(f"Invalid mesh_views: {mesh_views}")
+
+        gt_row = np.concatenate([gt_mesh, panel_gt], axis=1)
+        pred_row = np.concatenate([pred_mesh, panel_pred], axis=1)
         frame = np.concatenate([gt_row, pred_row], axis=0)
         frames.append(frame)
     return frames
@@ -428,10 +514,11 @@ def main() -> None:
     )
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--fps", type=int, default=10)
-    parser.add_argument("--render_width", type=int, default=640)
-    parser.add_argument("--render_height", type=int, default=360)
+    parser.add_argument("--render_width", type=int, default=360)
+    parser.add_argument("--render_height", type=int, default=640)
     parser.add_argument("--plot_width", type=int, default=420)
-    parser.add_argument("--plot_height", type=int, default=360)
+    parser.add_argument("--plot_height", type=int, default=640)
+    parser.add_argument("--mesh_views", type=str, default="both", choices=["front", "back", "both"])
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
 
@@ -512,8 +599,9 @@ def main() -> None:
     background = cv2.imread("backplain.png")
     if background is None:
         raise FileNotFoundError("backplain.png not found in current working directory")
-    background = cv2.resize(background, (int(args.render_width), int(args.render_height)))
-    background = background.astype(np.uint8)
+    target_w = int(args.render_width)
+    target_h = int(args.render_height)
+    background = _resize_letterbox(background.astype(np.uint8), target_w=target_w, target_h=target_h)
 
     model = _load_model(checkpoint_path, device=device)
 
@@ -560,6 +648,7 @@ def main() -> None:
                 fps=int(args.fps),
                 plot_width=int(args.plot_width),
                 plot_height=int(args.plot_height),
+                mesh_views=args.mesh_views,
             )
             cell_streams.append(cell_frames)
 
