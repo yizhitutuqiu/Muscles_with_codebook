@@ -17,6 +17,7 @@ from .dstformer import DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2Config
 from .dstformer_v3_moe import DSTFormerV3MoEConfig
 from .dstformer_v4_dual_moe import DSTFormerV4DualMoEConfig
+from .dstformer_v5_guided_moe import DSTFormerV5GuidedMoEConfig
 
 
 # 关节点数，与 joints3d (B,T,25,3) 一致
@@ -41,6 +42,7 @@ class Stage2Pose2EMGConfig:
     dst_v2: Optional[DSTFormerV2Config] = None
     dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None
     dst_v4_dual_moe: Optional[DSTFormerV4DualMoEConfig] = None
+    dst_v5_guided_moe: Optional[DSTFormerV5GuidedMoEConfig] = None
     tcn: Optional[TCNBackboneConfig] = None
     # EMG 头：对 N 个 token 做融合后映射到 8 维。mixer=Stage1 式 Mixer（推荐）/ flatten=展平+Linear
     emg_head_type: str = "mixer"
@@ -148,6 +150,7 @@ class Stage2Pose2EMG(nn.Module):
             dst_v2=cfg.dst_v2,
             dst_v3_moe=cfg.dst_v3_moe,
             dst_v4_dual_moe=cfg.dst_v4_dual_moe,
+            dst_v5_guided_moe=cfg.dst_v5_guided_moe,
             tcn_cfg=cfg.tcn,
         )
 
@@ -290,7 +293,21 @@ class Stage2Pose2EMG(nn.Module):
             z_fused = z_fused + cond_feat
 
         # 融合后时序，可插拔：dstformer / tcn -> (B,T,N,C)，保留 N 不做 mean
-        z_out = self.temporal(z_fused)
+        # 提取 codebook guided feature (B, T, D)
+        guide_feat = z_disc_bt.mean(dim=2) if z_disc_bt is not None else None
+        
+        # 将 guide_feat 传入 temporal_encoder (如果它支持的话)
+        if hasattr(self.temporal, "forward"):
+            # 检查 temporal 是否支持 guide 参数
+            import inspect
+            sig = inspect.signature(self.temporal.forward)
+            if "guide" in sig.parameters:
+                z_out = self.temporal(z_fused, guide=guide_feat)
+            else:
+                z_out = self.temporal(z_fused)
+        else:
+            z_out = self.temporal(z_fused)
+            
         emg_out = self.emg_head(z_out)  # (B,T,8)，EMG 头输出：全量或残差由 emg_pred_mode 决定
 
         pred_mode = str(self.cfg.emg_pred_mode).strip().lower()

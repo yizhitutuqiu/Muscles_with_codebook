@@ -18,6 +18,7 @@ from .dstformer import DSTFormer, DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2, DSTFormerV2Config
 from .dstformer_v3_moe import DSTFormerV3MoE, DSTFormerV3MoEConfig
 from .dstformer_v4_dual_moe import DSTFormerV4DualMoE, DSTFormerV4DualMoEConfig
+from .dstformer_v5_guided_moe import DSTFormerV5GuidedMoE, DSTFormerV5GuidedMoEConfig
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,19 @@ class _TCNBlock(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x + self.drop(self.act(self.norm(self.conv(x))))
 
+
+class DSTFormerV5GuidedMoETemporalBackbone(nn.Module):
+    """
+    Wrapper for DSTFormerV5GuidedMoE
+    """
+    def __init__(self, cfg: DSTFormerV5GuidedMoEConfig):
+        super().__init__()
+        self.dst = DSTFormerV5GuidedMoE(cfg)
+
+    def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # x: (B, T, N, C)
+        # guide: (B, T, C) or None
+        return self.dst(x, guide=guide)
 
 class TCNTemporalBackbone(nn.Module):
     """
@@ -158,6 +172,7 @@ def build_temporal_backbone(
     dst_v2: Optional[DSTFormerV2Config] = None,
     dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None,
     dst_v4_dual_moe: Optional[DSTFormerV4DualMoEConfig] = None,
+    dst_v5_guided_moe: Optional[DSTFormerV5GuidedMoEConfig] = None,
     tcn_cfg: Optional[TCNBackboneConfig] = None,
     **kwargs: Any,
 ) -> nn.Module:
@@ -204,6 +219,17 @@ def build_temporal_backbone(
         cfg_dict.update({k: v for k, v in kwargs.items() if k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc", "num_experts", "num_spatial_experts", "num_temporal_experts")})
         cfg = DSTFormerV4DualMoEConfig(**cfg_dict)
         return DSTFormerV4DualMoETemporalBackbone(cfg)
+    if temporal_type in ("dstformer_v5_guided_moe", "dst_v5_guided_moe", "h8_guided"):
+        cfg_dict = {"dim": dim}
+        if dst_cfg is not None:
+            for k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers"):
+                if hasattr(dst_cfg, k): cfg_dict[k] = getattr(dst_cfg, k)
+        if dst_v5_guided_moe is not None:
+            for k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc", "num_experts", "guide_mode"):
+                if hasattr(dst_v5_guided_moe, k): cfg_dict[k] = getattr(dst_v5_guided_moe, k)
+        cfg_dict.update({k: v for k, v in kwargs.items() if k in ("num_heads", "mlp_ratio", "dropout", "attn_dropout", "num_layers", "use_rope", "use_ltc", "num_experts", "guide_mode")})
+        cfg = DSTFormerV5GuidedMoEConfig(**cfg_dict)
+        return DSTFormerV5GuidedMoETemporalBackbone(cfg)
     if temporal_type == "tcn":
         cfg = tcn_cfg or TCNBackboneConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("hidden_dim", "kernel_size", "num_layers", "dilation_base", "dropout")})
         return TCNTemporalBackbone(cfg)

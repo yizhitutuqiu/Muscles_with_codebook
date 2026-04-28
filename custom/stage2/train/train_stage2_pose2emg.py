@@ -385,6 +385,8 @@ def _run_training(
     dst_v3_moe_cfg = DSTFormerV3MoEConfig(**(model_cfg.get("dst_v3_moe", {}) or {}))
     from custom.stage2.models.dstformer_v4_dual_moe import DSTFormerV4DualMoEConfig
     dst_v4_dual_moe_cfg = DSTFormerV4DualMoEConfig(**(model_cfg.get("dst_v4_dual_moe", {}) or {}))
+    from custom.stage2.models.dstformer_v5_guided_moe import DSTFormerV5GuidedMoEConfig
+    dst_v5_guided_moe_cfg = DSTFormerV5GuidedMoEConfig(**(model_cfg.get("dst_v5_guided_moe", {}) or {}))
     dim = int(model_cfg.get("dim", 256))
     residual_add_cfg = None
     if fusion_type in ("residual_add", "residual", "add"):
@@ -411,6 +413,7 @@ def _run_training(
         dst_v2=dst_v2_cfg,
         dst_v3_moe=dst_v3_moe_cfg,
         dst_v4_dual_moe=dst_v4_dual_moe_cfg,
+        dst_v5_guided_moe=dst_v5_guided_moe_cfg,
         tcn=tcn_cfg,
         emg_head_type=str(model_cfg.get("emg_head_type", "mixer")).strip().lower(),
         emg_hidden=int(model_cfg.get("emg_hidden", 256)),

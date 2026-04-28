@@ -1,0 +1,76 @@
+experiment:
+  name: exp_h8_baseline_8exp
+  seed: 42
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 25
+  max_steps: 20000
+  save_every: 1000
+  eval_every: 400
+  grad_clip_norm: 1.0
+  distributed:
+    enabled: false
+    gpus:
+    - 2
+    backend: nccl
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_steps: 600
+  lr_schedule: cosine_annealing
+  lr_min: 8.0e-06
+data:
+  split: train
+  batch_size: 16
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: 'False'
+  std: 'False'
+  percent: 1.0
+  emg_normalize_target: true
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  val_filelist: custom/tools/datasetsplits/miaofficial_val_eval.txt
+  max_samples: null
+  require_files:
+  - emgvalues.npy
+  - joints3d.npy
+stage1:
+  checkpoint: custom/checkpoints/batch_codebook/clip_5_code_256/best.pt
+checkpoints:
+  dir: custom/stage2/checkpoints/batch_stage2_h8_guided_moe/exp_h8_baseline_8exp
+model:
+  use_cond: false
+  token_count: 1
+  dim: 256
+  cont_encoder_type: joint_25
+  cont_hidden_dim: 1024
+  cont_joint_hidden_dim: 128
+  fusion_type: symmetric_dcsa
+  dcsa:
+    dim: 256
+    num_heads: 8
+    dropout: 0.2
+  dcsa_asymmetric:
+    dim: 256
+    num_heads: 8
+    dropout: 0.2
+  temporal_type: dstformer_v5_guided_moe
+  dst:
+    dim: 256
+    num_heads: 8
+    mlp_ratio: 4.0
+    dropout: 0.15
+    attn_dropout: 0.15
+    num_layers: 6
+  emg_head_type: flatten
+  emg_hidden: 256
+  emg_mixer_hidden_dim: 256
+  emg_mixer_num_layers: 4
+  emg_pred_mode: full
+  max_seq_len: 256
+  dst_v5_guided_moe:
+    num_experts: 8
+    guide_mode: none
+name: exp_h8_baseline_8exp

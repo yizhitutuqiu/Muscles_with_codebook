@@ -1,0 +1,50 @@
+# H8 Experiment: Codebook-Guided MoE Routing
+# Based on the best H7 configuration: Symmetric DCSA + Dual-Branch MoE
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h8_guided_moe"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h8_guided_moe/summary.csv"
+
+tmux:
+  session_name: "batch_stage2_h8"
+  attach: false
+  fail_if_exists: false
+
+gpus: [3, 4, 5]
+
+experiments:
+  # 1. Baseline H8: Same as H7 Full, but with 8 experts (Blind Routing)
+  - name: "exp_h8_baseline_8exp"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # 2. Strategy 2: Semantic Bias Guided MoE (Soft Prompting)
+  - name: "exp_h8_guided_bias"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "bias"
+    data:
+      batch_size: 16
+
+  # 3. Strategy 3: Cross-Attention Guided MoE
+  - name: "exp_h8_guided_cross_attn"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "cross_attn"
+    data:
+      batch_size: 16
