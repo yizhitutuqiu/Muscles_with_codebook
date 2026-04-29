@@ -1,3 +1,17 @@
 .home/
 .trae/
 data/
+
+# Local datasets / external mounts (often symlinks)
+MIADatasetOfficial/
+MIADataset*/
+
+# External model assets (often symlinks)
+pretrained-checkpoints/
+SMPL_models/
+
+# musclesinaction runtime assets
+musclesinaction/vibe_data/
+musclesinaction/muscleresults/
+musclesinaction/checkpoints/
+musclesinaction/logs/
