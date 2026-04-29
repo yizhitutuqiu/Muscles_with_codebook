@@ -3,12 +3,24 @@
 data/
 
 # Local datasets / external mounts (often symlinks)
+MIADatasetOfficial
 MIADatasetOfficial/
+MIADataset*
 MIADataset*/
+amass
+amass/
+base_data
+base_data/
+musclesinaction
+musclesinaction/
 
 # External model assets (often symlinks)
+pretrained-checkpoints
 pretrained-checkpoints/
 SMPL_models/
+
+# External symlinked assets sometimes appear as files
+backplain.png
 
 # musclesinaction runtime assets
 musclesinaction/vibe_data/
