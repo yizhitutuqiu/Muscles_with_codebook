@@ -1,0 +1,45 @@
+name: "batch_stage2_h9_advanced_guided_moe"
+gpus: [4, 5, 6, 7]
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+
+experiments:
+  - name: "exp_h9_baseline_8exp"
+    model:
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+      
+  - name: "exp_h9_guided_gated"
+    model:
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "gated"
+    data:
+      batch_size: 16
+
+  - name: "exp_h9_guided_temporal_only"
+    model:
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "temporal_only"
+    data:
+      batch_size: 16
+
+  - name: "exp_h9_guided_hierarchical"
+    model:
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "hierarchical"
+    data:
+      batch_size: 16

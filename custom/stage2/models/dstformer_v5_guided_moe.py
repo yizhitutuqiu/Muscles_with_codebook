@@ -19,7 +19,7 @@ class DSTFormerV5GuidedMoEConfig:
     use_rope: bool = True
     use_ltc: bool = True
     num_experts: int = 8
-    guide_mode: str = "none"  # "none", "bias", "cross_attn"
+    guide_mode: str = "none"  # "none", "bias", "cross_attn", "gated", "temporal_only", "hierarchical"
 
 class DenseGuidedMoESwiGLU(nn.Module):
     """
@@ -36,23 +36,31 @@ class DenseGuidedMoESwiGLU(nn.Module):
         # Base router from continuous feature
         self.router = nn.Linear(in_features, num_experts)
         
-        if self.guide_mode == "bias":
+        if self.guide_mode in ["bias", "hierarchical", "temporal_only"]:
             self.guide_proj = nn.Linear(in_features, num_experts)
         elif self.guide_mode == "cross_attn":
             self.guide_q = nn.Linear(in_features, in_features)
             self.expert_keys = nn.Parameter(torch.randn(num_experts, in_features))
             nn.init.normal_(self.expert_keys, std=0.02)
+        elif self.guide_mode == "gated":
+            self.guide_proj = nn.Linear(in_features, num_experts)
+            self.gate_proj = nn.Linear(in_features, 1)
         
         self.experts = nn.ModuleList([
             SwiGLU(in_features, hidden_features, out_features, dropout, use_ltc)
             for _ in range(num_experts)
         ])
         
-    def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None, is_temporal: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None, is_temporal: bool = False, layer_ratio: float = 1.0) -> torch.Tensor:
         # x: (B*T, N, C) if not is_temporal else (B*N, T, C)
         router_logits = self.router(x)  # (..., E)
         
-        if guide is not None and self.guide_mode != "none":
+        # Temporal only logic
+        apply_guide = guide is not None and self.guide_mode != "none"
+        if self.guide_mode == "temporal_only" and not is_temporal:
+            apply_guide = False
+            
+        if apply_guide:
             B, T, C = guide.shape
             
             if not is_temporal:
@@ -63,13 +71,21 @@ class DenseGuidedMoESwiGLU(nn.Module):
                 N = x.shape[0] // B
                 g = guide.unsqueeze(1).expand(B, N, T, C).reshape(B*N, T, C)
                 
-            if self.guide_mode == "bias":
+            if self.guide_mode in ["bias", "temporal_only"]:
                 bias = self.guide_proj(g)  # (..., E)
                 router_logits = router_logits + bias
+            elif self.guide_mode == "hierarchical":
+                bias = self.guide_proj(g)
+                # Apply the fading weight
+                router_logits = router_logits + bias * layer_ratio
             elif self.guide_mode == "cross_attn":
                 q = self.guide_q(g)  # (..., C)
                 attn_logits = torch.matmul(q, self.expert_keys.T) / (C ** 0.5)
                 router_logits = router_logits + attn_logits
+            elif self.guide_mode == "gated":
+                guide_logits = self.guide_proj(g)
+                gate = torch.sigmoid(self.gate_proj(x)) # (..., 1)
+                router_logits = gate * router_logits + (1 - gate) * guide_logits
                 
         routing_weights = F.softmax(router_logits, dim=-1)
         
@@ -124,7 +140,7 @@ class _DSTFormerV5GuidedMoEBlock(nn.Module):
             freqs_cis = precompute_freqs_cis(self.head_dim, max_t)
             self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 
-    def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None, layer_ratio: float = 1.0) -> torch.Tensor:
         b, t, n, c = x.shape
         
         # ================= ST Branch =================
@@ -135,7 +151,7 @@ class _DSTFormerV5GuidedMoEBlock(nn.Module):
         x_st = x_st + self.drop(ys.reshape(b, t, n, c))
         
         xs_ffn = self.st_s_ffn_norm(x_st).reshape(b * t, n, c)
-        ys_ffn = self.st_s_ffn(xs_ffn, guide=guide, is_temporal=False)
+        ys_ffn = self.st_s_ffn(xs_ffn, guide=guide, is_temporal=False, layer_ratio=layer_ratio)
         x_st = x_st + self.drop(ys_ffn.reshape(b, t, n, c))
         
         # 2. Temporal
@@ -150,7 +166,7 @@ class _DSTFormerV5GuidedMoEBlock(nn.Module):
         x_st = x_st + self.drop(yt.reshape(b, n, t, c).transpose(1, 2))
         
         xt_ffn = self.st_t_ffn_norm(x_st).transpose(1, 2).reshape(b * n, t, c)
-        yt_ffn = self.st_t_ffn(xt_ffn, guide=guide, is_temporal=True)
+        yt_ffn = self.st_t_ffn(xt_ffn, guide=guide, is_temporal=True, layer_ratio=layer_ratio)
         x_st = x_st + self.drop(yt_ffn.reshape(b, n, t, c).transpose(1, 2))
         
         # ================= TS Branch =================
@@ -167,7 +183,7 @@ class _DSTFormerV5GuidedMoEBlock(nn.Module):
         x_ts = x_ts + self.drop(yt2.reshape(b, n, t, c).transpose(1, 2))
         
         xt2_ffn = self.ts_t_ffn_norm(x_ts).transpose(1, 2).reshape(b * n, t, c)
-        yt2_ffn = self.ts_t_ffn(xt2_ffn, guide=guide, is_temporal=True)
+        yt2_ffn = self.ts_t_ffn(xt2_ffn, guide=guide, is_temporal=True, layer_ratio=layer_ratio)
         x_ts = x_ts + self.drop(yt2_ffn.reshape(b, n, t, c).transpose(1, 2))
         
         # 2. Spatial
@@ -176,7 +192,7 @@ class _DSTFormerV5GuidedMoEBlock(nn.Module):
         x_ts = x_ts + self.drop(ys2.reshape(b, t, n, c))
         
         xs2_ffn = self.ts_s_ffn_norm(x_ts).reshape(b * t, n, c)
-        ys2_ffn = self.ts_s_ffn(xs2_ffn, guide=guide, is_temporal=False)
+        ys2_ffn = self.ts_s_ffn(xs2_ffn, guide=guide, is_temporal=False, layer_ratio=layer_ratio)
         x_ts = x_ts + self.drop(ys2_ffn.reshape(b, t, n, c))
         
         # ================= Fusion =================
@@ -195,6 +211,10 @@ class DSTFormerV5GuidedMoE(nn.Module):
         self.out_norm = nn.LayerNorm(int(cfg.dim))
 
     def forward(self, x: torch.Tensor, guide: Optional[torch.Tensor] = None) -> torch.Tensor:
-        for blk in self.blocks:
-            x = blk(x, guide=guide)
+        num_layers = len(self.blocks)
+        for i, blk in enumerate(self.blocks):
+            # Calculate layer ratio for hierarchical fading
+            # Layer 0 gets ratio 1.0, Layer (num_layers-1) gets ratio 0.0
+            layer_ratio = 1.0 - (i / max(1, num_layers - 1))
+            x = blk(x, guide=guide, layer_ratio=layer_ratio)
         return self.out_norm(x)
