@@ -2,9 +2,14 @@ name: "batch_stage2_h9_advanced_guided_moe"
 gpus: [4, 5, 6, 7]
 
 base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h9"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h9/summary.csv"
 
 experiments:
   - name: "exp_h9_baseline_8exp"
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
     model:
       fusion_type: "symmetric_dcsa"
       temporal_type: "dstformer_v5_guided_moe"
@@ -15,6 +20,9 @@ experiments:
       batch_size: 16
       
   - name: "exp_h9_guided_gated"
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
     model:
       fusion_type: "symmetric_dcsa"
       temporal_type: "dstformer_v5_guided_moe"
@@ -25,6 +33,9 @@ experiments:
       batch_size: 16
 
   - name: "exp_h9_guided_temporal_only"
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
     model:
       fusion_type: "symmetric_dcsa"
       temporal_type: "dstformer_v5_guided_moe"
@@ -35,6 +46,9 @@ experiments:
       batch_size: 16
 
   - name: "exp_h9_guided_hierarchical"
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
     model:
       fusion_type: "symmetric_dcsa"
       temporal_type: "dstformer_v5_guided_moe"
