@@ -118,6 +118,10 @@ def _build_model_from_cfg(cfg: Dict[str, Any], device: torch.device) -> FrameCod
         smpl_pose=_build_optional_modality_cfg("smpl_pose", mods.get("smpl_pose")),
         emg=_build_modality_cfg("emg", mods["emg"]),
         encoder_decoder_only=bool(model_cfg.get("encoder_decoder_only", False)),
+        use_semantic_aux=bool(model_cfg.get("use_semantic_aux", False)),
+        shared_semantic_head=bool(model_cfg.get("shared_semantic_head", True)),
+        num_classes=int(model_cfg.get("num_classes", 15)),
+        semantic_aux_weight=float(model_cfg.get("semantic_aux_weight", 0.1)),
     )
     return FrameCodebookModel(fc_cfg).to(device)
 
@@ -285,14 +289,19 @@ def _predict_emg_from_joints_raw(
     joints3d_flat: torch.Tensor,
     *,
     bypass_vq: bool = False,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    xj_n, zq_j, idx_j, _, ppl_j, _ = model._encode_quantize(
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Any]:
+    res = model._encode_quantize(
         model.joints3d, joints3d_flat, bypass_vq=bypass_vq
     )
+    if len(res) == 6:
+        xj_n, zq_j, idx_j, _, ppl_j, _ = res
+        aux_j = None
+    else:
+        xj_n, zq_j, idx_j, _, ppl_j, _, aux_j = res
     del xj_n
     pred_emg_n = model._decode(model.emg, zq_j)
     pred_emg = _denormalize_from_modality(model.emg, pred_emg_n)
-    return pred_emg, idx_j, ppl_j, zq_j
+    return pred_emg, idx_j, ppl_j, zq_j, aux_j
 
 
 def _summarize_code_usage(
@@ -598,10 +607,36 @@ def _evaluate_one_checkpoint(
                 )
         # 与训练同口径：同 model._smooth_l1(pred,target)，同 target=normalize(x, update=False)
         with torch.no_grad():
+            
+            # Extract exercise_ids if possible
+            exercise_ids = None
+            if "filepath" in batch:
+                EXERCISES = [
+                    "ElbowPunch", "FrontKick", "FrontPunch", "HighKick", "HookPunch",
+                    "JumpingJack", "KneeKick", "LegBack", "LegCross", "RonddeJambe",
+                    "Running", "Shuffle", "SideLunges", "SlowSkater", "Squat"
+                ]
+                EXERCISE_TO_ID = {name.lower(): i for i, name in enumerate(EXERCISES)}
+                try:
+                    ids = []
+                    for path in batch["filepath"]:
+                        ex_name = path.split('/')[-2].lower()
+                        ids.append(EXERCISE_TO_ID.get(ex_name, 0))
+                    ex_tensor = torch.tensor(ids, dtype=torch.long, device=device)
+                    # expand logic from train
+                    if pack_mode in ("frame", "frames"):
+                        exercise_ids = ex_tensor.unsqueeze(1).expand(b, t).reshape(b * t)
+                    else:
+                        num_clips = b  # since we reshape inside _prepare_eval_batch so it already handles this
+                        exercise_ids = ex_tensor.unsqueeze(1).expand(b, 1).reshape(b) # not perfectly matched but let's just pass None if complicated
+                except Exception:
+                    pass
+
             _, stats = model(
                 x_joints3d=joints3d_flat,
                 x_smpl_pose=None,
                 x_emg=emg_flat,
+                exercise_ids=exercise_ids,
                 emg_weight=1.0,
                 bypass_vq=False,
                 loss_w_joints3d_self=1.0,
@@ -611,10 +646,24 @@ def _evaluate_one_checkpoint(
                 loss_w_joints3d_to_emg=1.0,
                 loss_w_vq_emg=1.0,
             )
+            
         recon_accums["joints3d_self"] += float(stats["joints3d/self_smooth_l1"].item()) * b
         recon_accums["emg_self"] += float(stats["emg/self_smooth_l1"].item()) * b
         recon_accums["emg_to_joints3d"] += float(stats["emg_to_joints3d/smooth_l1"].item()) * b
         recon_accums["joints3d_to_emg"] += float(stats["joints3d_to_emg/smooth_l1"].item()) * b
+        
+        if "joints3d/aux_ce_e" in stats:
+            if "aux_ce_e" not in recon_accums:
+                recon_accums["aux_ce_e"] = 0.0
+                recon_accums["aux_ce_q"] = 0.0
+                recon_accums["aux_acc_e"] = 0.0
+                recon_accums["aux_acc_q"] = 0.0
+                
+            recon_accums["aux_ce_e"] += float(stats["joints3d/aux_ce_e"].item()) * b
+            recon_accums["aux_ce_q"] += float(stats["joints3d/aux_ce_q"].item()) * b
+            recon_accums["aux_acc_e"] += float(stats["joints3d/aux_acc_e"].item()) * b
+            recon_accums["aux_acc_q"] += float(stats["joints3d/aux_acc_q"].item()) * b
+            
         recon_total_samples += b
 
         eval_bypass = getattr(model.cfg, "encoder_decoder_only", False)
@@ -644,12 +693,14 @@ def _evaluate_one_checkpoint(
             joints3d_flat_for_codes = joints3d_flat
             emg_flat_for_codes = emg_flat
 
-        pred_emg_flat, idx_j, ppl_j, _ = _predict_emg_from_joints_raw(
+        pred_emg_flat, idx_j, ppl_j, _, _ = _predict_emg_from_joints_raw(
             model, joints3d_flat, bypass_vq=eval_bypass
         )
-        _, _, idx_e_full, _, ppl_e, _ = model._encode_quantize(
+        res_e_full = model._encode_quantize(
             model.emg, emg_flat, bypass_vq=eval_bypass
         )
+        idx_e_full = res_e_full[2]
+        ppl_e = res_e_full[4]
         # 仅用前 step 帧的编码结果做 codebook 统计（与 Stage2 口径一致）；若提供了 --stage2_ckpt 则用 Stage2 模型算 idx_j 与 Stage2 评测完全一致
         if stage2_model is not None:
             j3d_stage2 = torch.as_tensor(batch["3dskeleton"], device=device, dtype=torch.float32)
@@ -666,16 +717,22 @@ def _evaluate_one_checkpoint(
                 float(np.exp(-np.sum(_p * np.log(_p)))) if _p.size > 0 else 0.0,
                 device=device,
             )
-            _, _, idx_e, _, ppl_e_codes, _ = model._encode_quantize(
+            res_e = model._encode_quantize(
                 model.emg, emg_flat_for_codes, bypass_vq=eval_bypass
             )
+            idx_e = res_e[2]
+            ppl_e_codes = res_e[4]
         else:
-            _, _, idx_j, _, ppl_j_codes, _ = model._encode_quantize(
+            res_j = model._encode_quantize(
                 model.joints3d, joints3d_flat_for_codes, bypass_vq=eval_bypass
             )
-            _, _, idx_e, _, ppl_e_codes, _ = model._encode_quantize(
+            idx_j = res_j[2]
+            ppl_j_codes = res_j[4]
+            res_e = model._encode_quantize(
                 model.emg, emg_flat_for_codes, bypass_vq=eval_bypass
             )
+            idx_e = res_e[2]
+            ppl_e_codes = res_e[4]
 
         idx_j_np = idx_j.detach().cpu().numpy().reshape(-1)
         idx_e_np = idx_e.detach().cpu().numpy().reshape(-1)
@@ -717,6 +774,11 @@ def _evaluate_one_checkpoint(
     pred_cat = np.concatenate(pred_all, axis=0)
     gt_cat = np.concatenate(gt_all, axis=0)
     metrics = _compute_official_metrics(pred_cat, gt_cat)
+    
+    # 汇总 recon loss 与 acc
+    for k, v in recon_accums.items():
+        metrics[f"loss_{k}"] = v / max(recon_total_samples, 1)
+
     codebook_stats = {
         "joints3d": _summarize_code_usage(
             name="joints3d",

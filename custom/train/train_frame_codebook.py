@@ -185,7 +185,7 @@ def _codebook_kmeans_init(
         except StopIteration:
             it = iter(loader)
             batch = next(it)
-        joints3d_f, _, emg_f = _prepare_batch(
+        joints3d_f, _, emg_f, ex_ids = _prepare_batch(
             batch,
             device,
             joints3d_root_center=joints3d_root_center,
@@ -193,6 +193,7 @@ def _codebook_kmeans_init(
             pack_mode=pack_mode,
             clip_len=clip_len,
         )
+
         with torch.no_grad():
             out = model.get_encoder_outputs_for_init(
                 x_joints3d=joints3d_f,
@@ -293,6 +294,10 @@ def _build_model(cfg: Dict[str, Any], device: torch.device) -> FrameCodebookMode
         smpl_pose=_build_optional_modality_cfg("smpl_pose", mods.get("smpl_pose")),
         emg=_build_modality_cfg("emg", mods["emg"]),
         encoder_decoder_only=bool(model_cfg.get("encoder_decoder_only", False)),
+        use_semantic_aux=bool(model_cfg.get("use_semantic_aux", False)),
+        shared_semantic_head=bool(model_cfg.get("shared_semantic_head", True)),
+        num_classes=int(model_cfg.get("num_classes", 15)),
+        semantic_aux_weight=float(model_cfg.get("semantic_aux_weight", 0.1)),
     )
     return FrameCodebookModel(fc_cfg).to(device)
 
@@ -314,7 +319,7 @@ def _prepare_batch(
     joints3d_root_index: int,
     pack_mode: str = "frame",
     clip_len: int = 30,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
     """
     Official dataloader returns:
       - 3dskeleton: (B, T, 25, 3)
@@ -345,10 +350,33 @@ def _prepare_batch(
         joints3d = _root_center_joints3d(joints3d, root_index=joints3d_root_index)
 
     mode = str(pack_mode).lower().strip()
+    
+    EXERCISES = [
+        "ElbowPunch", "FrontKick", "FrontPunch", "HighKick", "HookPunch",
+        "JumpingJack", "KneeKick", "LegBack", "LegCross", "RonddeJambe",
+        "Running", "Shuffle", "SideLunges", "SlowSkater", "Squat"
+    ]
+    EXERCISE_TO_ID = {name.lower(): i for i, name in enumerate(EXERCISES)}
+
+    exercise_ids = None
+    if "filepath" in batch:
+        try:
+            ids = []
+            for path in batch["filepath"]:
+                ex_name = path.split('/')[-2].lower()
+                ids.append(EXERCISE_TO_ID.get(ex_name, 0))
+            exercise_ids = torch.tensor(ids, dtype=torch.long, device=device)
+        except Exception:
+            pass
+
     if mode in ("frame", "frames"):
         joints3d_flat = joints3d.reshape(b * t, 75)
         emg_flat = emg.permute(0, 2, 1).contiguous().reshape(b * t, 8)
-        return joints3d_flat, torch.empty((0, 72), device=device), emg_flat
+        
+        if exercise_ids is not None:
+            exercise_ids = exercise_ids.unsqueeze(1).expand(b, t).reshape(b * t)
+            
+        return joints3d_flat, torch.empty((0, 72), device=device), emg_flat, exercise_ids
 
     if mode in ("clip", "sequence", "seq"):
         # 将原始序列划分为长度为 clip_len 的多个子片段，如果无法整除，则丢弃末尾部分
@@ -365,7 +393,11 @@ def _prepare_batch(
         
         # emg: (B, 8, num_clips * L) -> (B, num_clips, L, 8) -> (B * num_clips, L, 8)
         emg_clip = emg.permute(0, 2, 1).contiguous().reshape(b, num_clips, L, 8).reshape(b * num_clips, L * 8)
-        return joints3d_clip, torch.empty((0, 72), device=device), emg_clip
+        
+        if exercise_ids is not None:
+            exercise_ids = exercise_ids.unsqueeze(1).expand(b, num_clips).reshape(b * num_clips)
+            
+        return joints3d_clip, torch.empty((0, 72), device=device), emg_clip, exercise_ids
 
     raise ValueError(f"Unsupported data.pack.mode: {pack_mode}")
 
@@ -381,35 +413,45 @@ def _eval_one_epoch(
     pack_mode: str,
     clip_len: int,
     loss_weights: Dict[str, float],
-) -> float:
-    """跑一轮 val，返回平均 total_loss（与训练同口径，用于按 val_loss 保存 best.pt）。"""
+) -> Dict[str, float]:
+    """跑一轮 val，返回平均 stats 字典。"""
     model.eval()
-    loss_list: List[float] = []
-    for batch in loader:
-        joints3d_f, _, emg_f = _prepare_batch(
-            batch,
-            device,
-            joints3d_root_center=joints3d_root_center,
-            joints3d_root_index=joints3d_root_index,
-            pack_mode=pack_mode,
-            clip_len=clip_len,
-        )
-        _, stats = model(
-            x_joints3d=joints3d_f,
-            x_smpl_pose=None,
-            x_emg=emg_f,
-            emg_weight=loss_weights.get("emg_branch", 1.0),
-            bypass_vq=False,
-            loss_w_joints3d_self=loss_weights.get("joints3d_self", 1.0),
-            loss_w_vq_joints3d=loss_weights.get("vq_joints3d", 1.0),
-            loss_w_emg_self=loss_weights.get("emg_self", 1.0),
-            loss_w_emg_to_joints3d=loss_weights.get("emg_to_joints3d", 1.0),
-            loss_w_joints3d_to_emg=loss_weights.get("joints3d_to_emg", 1.0),
-            loss_w_vq_emg=loss_weights.get("vq_emg", 1.0),
-        )
-        loss_list.append(float(stats["total_loss"].item()))
+    accum_stats: Dict[str, float] = {}
+    count = 0
+    with torch.no_grad():
+        for batch in loader:
+            joints3d_f, _, emg_f, ex_ids = _prepare_batch(
+                batch,
+                device,
+                joints3d_root_center=joints3d_root_center,
+                joints3d_root_index=joints3d_root_index,
+                pack_mode=pack_mode,
+                clip_len=clip_len,
+            )
+            _, stats = model(
+                x_joints3d=joints3d_f,
+                x_smpl_pose=None,
+                x_emg=emg_f,
+                exercise_ids=ex_ids,
+                emg_weight=loss_weights.get("emg_branch", 1.0),
+                bypass_vq=False,
+                loss_w_joints3d_self=loss_weights.get("joints3d_self", 1.0),
+                loss_w_vq_joints3d=loss_weights.get("vq_joints3d", 1.0),
+                loss_w_emg_self=loss_weights.get("emg_self", 1.0),
+                loss_w_emg_to_joints3d=loss_weights.get("emg_to_joints3d", 1.0),
+                loss_w_joints3d_to_emg=loss_weights.get("joints3d_to_emg", 1.0),
+                loss_w_vq_emg=loss_weights.get("vq_emg", 1.0),
+            )
+            for k, v in stats.items():
+                if isinstance(v, torch.Tensor):
+                    v = v.item()
+                accum_stats[k] = accum_stats.get(k, 0.0) + v
+            count += 1
+            
     model.train()
-    return sum(loss_list) / max(len(loss_list), 1)
+    if count > 0:
+        return {k: v / count for k, v in accum_stats.items()}
+    return accum_stats
 
 
 # ---------- 终极试金石：可视化 Loss 的 target（与 vis 脚本同款反归一化+骨架） ----------
@@ -927,7 +969,7 @@ def main() -> None:
                     g["lr"] = lr
             current_lr = optimizer.param_groups[0]["lr"]
 
-            joints3d_f, _, emg_f = _prepare_batch(
+            joints3d_f, _, emg_f, ex_ids = _prepare_batch(
                 batch,
                 device,
                 joints3d_root_center=joints3d_root_center,
@@ -967,6 +1009,7 @@ def main() -> None:
                 x_joints3d=joints3d_f,
                 x_smpl_pose=None,
                 x_emg=emg_f,
+                exercise_ids=ex_ids,
                 emg_weight=emg_weight,
                 bypass_vq=bypass_vq,
                 skip_vq_dead_reset=skip_vq_dead_reset,
@@ -1032,6 +1075,9 @@ def main() -> None:
                     "j3d_self_smooth_l1": float(stats["joints3d/self_smooth_l1"].item()),
                     "j3d_vq_beta_term": float(stats["joints3d/vq_loss"].item()),
                 }
+                if "joints3d/aux_acc_e" in stats:
+                    msg["j3d_aux_acc_e"] = float(stats["joints3d/aux_acc_e"].item())
+                    msg["j3d_aux_acc_q"] = float(stats["joints3d/aux_acc_q"].item())
                 if emg_weight != 0:
                     msg.update({
                         "emg_ppl": float(stats["emg/perplexity"].item()),
@@ -1041,6 +1087,9 @@ def main() -> None:
                         "j3d_to_emg_smooth_l1": float(stats["joints3d_to_emg/smooth_l1"].item()),
                         "emg_vq_beta_term": float(stats["emg/vq_loss"].item()),
                     })
+                    if "emg/aux_acc_e" in stats:
+                        msg["emg_aux_acc_e"] = float(stats["emg/aux_acc_e"].item())
+                        msg["emg_aux_acc_q"] = float(stats["emg/aux_acc_q"].item())
                 print("[Train]", msg)
 
                 if csv_writer is None:
@@ -1078,7 +1127,7 @@ def main() -> None:
                 and (step % eval_every == 0 or step == max_steps)
             )
             if do_eval:
-                val_loss = _eval_one_epoch(
+                val_stats = _eval_one_epoch(
                     model,
                     val_loader,
                     device,
@@ -1088,8 +1137,15 @@ def main() -> None:
                     clip_len=clip_len,
                     loss_weights=loss_weights,
                 )
-                writer.add_scalar("val/total_loss", val_loss, step)
+                val_loss = val_stats.get("total_loss", 0.0)
+                val_msg = {"step": step, "val_loss": val_loss}
+                for k, v in val_stats.items():
+                    writer.add_scalar(f"val/{k}", v, step)
+                    if "aux_acc" in k:
+                        val_msg[f"val_{k}"] = v
                 writer.flush()
+                print("[Eval]", val_msg)
+                
                 if val_loss < best_val_loss:
                     best_val_loss = float(val_loss)
                     best_path = ckpt_dir / "best.pt"

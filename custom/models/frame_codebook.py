@@ -36,13 +36,17 @@ class ModalityConfig:
     frame_mixer: Optional[Dict[str, Any]] = None  # used when encoder_type is frame_mixer: tokens_per_frame, etc.
 
 
-@dataclass(frozen=True)
+@dataclass
 class FrameCodebookConfig:
     vq: VQEMAConfig
     joints3d: ModalityConfig
     smpl_pose: Optional[ModalityConfig]
     emg: ModalityConfig
     encoder_decoder_only: bool = False  # 若 True：完全不用 codebook，只做 encoder→decoder 自重建，无交叉重建
+    use_semantic_aux: bool = False
+    shared_semantic_head: bool = True
+    num_classes: int = 15
+    semantic_aux_weight: float = 0.1
 
 
 class PerFrameMixerEncoder(nn.Module):
@@ -336,6 +340,16 @@ class FrameCodebookModel(nn.Module):
         self.smpl_pose = _ModalityAE(cfg.smpl_pose) if cfg.smpl_pose is not None else None
         self.emg = _ModalityAE(cfg.emg)
 
+        self.use_semantic_aux = cfg.use_semantic_aux
+        self.shared_semantic_head = cfg.shared_semantic_head
+        self.num_classes = cfg.num_classes
+        if self.use_semantic_aux:
+            self.semantic_classifier_e = nn.Linear(code_dim, self.num_classes)
+            if self.shared_semantic_head:
+                self.semantic_classifier_q = self.semantic_classifier_e
+            else:
+                self.semantic_classifier_q = nn.Linear(code_dim, self.num_classes)
+
     def _encode_quantize(
         self,
         mod: _ModalityAE,
@@ -345,7 +359,7 @@ class FrameCodebookModel(nn.Module):
         skip_vq_dead_reset: bool = False,
         vq_explore_noise_std_frac: float = 0.0,
         vq_commitment_beta: Optional[float] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         x = x.float()
         x_n = mod.normalize(x, update=self.training)
         batch_size = int(x_n.shape[0])
@@ -354,6 +368,11 @@ class FrameCodebookModel(nn.Module):
 
         # (B, token_count * code_dim) -> (B, token_count, code_dim)
         z_e = mod.encoder(x_n).view(batch_size, token_count, code_dim)
+        
+        logits_e = None
+        if self.use_semantic_aux:
+            z_e_pooled = z_e.mean(dim=1)
+            logits_e = self.semantic_classifier_e(z_e_pooled)
 
         if bypass_vq:
             # Cold-start warmup: encoder -> decoder only, codebook not used or updated.
@@ -365,7 +384,12 @@ class FrameCodebookModel(nn.Module):
             vq_loss = torch.tensor(0.0, device=dev)
             perplexity = torch.tensor(0.0, device=dev)
             usage = torch.tensor(0.0, device=dev)
-            return x_n, z_q, indices, vq_loss, perplexity, usage
+            
+            logits_q = None
+            if self.use_semantic_aux:
+                logits_q = self.semantic_classifier_q(z_q.view(batch_size, token_count, code_dim).mean(dim=1))
+            
+            return x_n, z_q, indices, vq_loss, perplexity, usage, (logits_e, logits_q) if self.use_semantic_aux else None
 
         # Quantize each token independently in the SAME shared codebook.
         z_q_tokens, indices, vq_loss, perplexity, usage = self.vq(
@@ -375,7 +399,13 @@ class FrameCodebookModel(nn.Module):
             commitment_beta=vq_commitment_beta,
         )
         z_q = z_q_tokens.view(batch_size, token_count * code_dim)
-        return x_n, z_q, indices, vq_loss, perplexity, usage
+        
+        logits_q = None
+        if self.use_semantic_aux:
+            z_q_pooled = z_q_tokens.view(batch_size, token_count, code_dim).mean(dim=1)
+            logits_q = self.semantic_classifier_q(z_q_pooled)
+            
+        return x_n, z_q, indices, vq_loss, perplexity, usage, (logits_e, logits_q) if self.use_semantic_aux else None
 
     @torch.no_grad()
     def get_encoder_outputs_for_init(
@@ -446,6 +476,7 @@ class FrameCodebookModel(nn.Module):
         x_joints3d: torch.Tensor,
         x_smpl_pose: Optional[torch.Tensor] = None,
         x_emg: torch.Tensor,
+        exercise_ids: Optional[torch.Tensor] = None,
         emg_weight: float = 1.0,
         bypass_vq: bool = False,
         skip_vq_dead_reset: bool = False,
@@ -475,8 +506,11 @@ class FrameCodebookModel(nn.Module):
             )
             self._bypass_vq_debug_done = True
         stats: Dict[str, torch.Tensor] = {}
+        
+        # We will collect aux logits if use_semantic_aux is true
+        aux_logits_dict = {}
 
-        xj_n, zq_j, idx_j, vq_j, ppl_j, use_j = self._encode_quantize(
+        xj_n, zq_j, idx_j, vq_j, ppl_j, use_j, aux_j = self._encode_quantize(
             self.joints3d,
             x_joints3d,
             bypass_vq=effective_bypass,
@@ -484,6 +518,9 @@ class FrameCodebookModel(nn.Module):
             vq_explore_noise_std_frac=vq_explore_noise_std_frac,
             vq_commitment_beta=vq_commitment_beta,
         )
+        
+        if self.use_semantic_aux:
+            aux_logits_dict['joints3d'] = aux_j
 
         self._record_codebook_stats(
             name="joints3d",
@@ -514,7 +551,7 @@ class FrameCodebookModel(nn.Module):
         # entirely. Otherwise the shared EMA VQ codebook will still be updated by EMG tokens
         # (AMASS provides all-zero EMG), which can collapse the codebook and harm joints3d.
         if float(emg_weight) != 0.0:
-            xe_n, zq_e, idx_e, vq_e, ppl_e, use_e = self._encode_quantize(
+            xe_n, zq_e, idx_e, vq_e, ppl_e, use_e, aux_e = self._encode_quantize(
                 self.emg,
                 x_emg,
                 bypass_vq=effective_bypass,
@@ -522,6 +559,8 @@ class FrameCodebookModel(nn.Module):
                 vq_explore_noise_std_frac=vq_explore_noise_std_frac,
                 vq_commitment_beta=vq_commitment_beta,
             )
+            if self.use_semantic_aux:
+                aux_logits_dict['emg'] = aux_e
             self._record_codebook_stats(
                 name="emg",
                 indices=idx_e,
@@ -565,6 +604,38 @@ class FrameCodebookModel(nn.Module):
                 raise ValueError("smpl_pose modality is enabled but x_smpl_pose is None")
             # Intentionally disabled from optimization in the current training setup.
             stats["smpl_pose/enabled_but_unused"] = torch.tensor(1.0, device=total.device)
+            if x_smpl_pose.numel() > 0:
+                xs_n, zq_s, idx_s, vq_s, ppl_s, use_s, aux_s = self._encode_quantize(
+                    self.smpl_pose,
+                    x_smpl_pose,
+                    bypass_vq=effective_bypass,
+                    skip_vq_dead_reset=skip_vq_dead_reset,
+                    vq_explore_noise_std_frac=vq_explore_noise_std_frac,
+                    vq_commitment_beta=vq_commitment_beta,
+                )
+                if self.use_semantic_aux:
+                    aux_logits_dict['smpl_pose'] = aux_s
+
+        if self.use_semantic_aux and exercise_ids is not None:
+            aux_loss = torch.tensor(0.0, device=total.device)
+            for mod_name, aux_logits in aux_logits_dict.items():
+                if aux_logits is not None:
+                    logits_e, logits_q = aux_logits
+                    if logits_e is not None:
+                        ce_e = F.cross_entropy(logits_e, exercise_ids)
+                        aux_loss = aux_loss + ce_e
+                        stats[f"{mod_name}/aux_ce_e"] = ce_e.detach()
+                        preds_e = torch.argmax(logits_e, dim=-1)
+                        stats[f"{mod_name}/aux_acc_e"] = (preds_e == exercise_ids).float().mean().detach()
+                    if logits_q is not None:
+                        ce_q = F.cross_entropy(logits_q, exercise_ids)
+                        aux_loss = aux_loss + ce_q
+                        stats[f"{mod_name}/aux_ce_q"] = ce_q.detach()
+                        preds_q = torch.argmax(logits_q, dim=-1)
+                        stats[f"{mod_name}/aux_acc_q"] = (preds_q == exercise_ids).float().mean().detach()
+            # weight for aux loss, default 0.1, could be configurable
+            total = total + aux_loss * getattr(self.cfg, "semantic_aux_weight", 0.1)
+            stats["aux_loss"] = aux_loss.detach()
 
         stats["total_loss"] = total.detach()
         stats["vq/num_resets"] = self.vq.num_resets.detach().float()

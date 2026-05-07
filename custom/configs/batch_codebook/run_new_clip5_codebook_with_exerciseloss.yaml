@@ -1,0 +1,37 @@
+base_config: "custom/configs/clip/new_temporal_vq.yaml"
+checkpoint_dir: "custom/checkpoints/new_clip5_codebook_with_exerciseloss"
+csv_output: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/summary.csv"
+
+tmux:
+  session_name: "batch_codebook_train"
+  attach: false
+  fail_if_exists: false
+
+experiments:
+  - name: "exp_shared_head"
+    train:
+      eval_every: 200
+    data:
+      pack:
+        clip_len: 5
+    model:
+      use_semantic_aux: true
+      shared_semantic_head: true
+      semantic_aux_weight: 0.1
+      vq:
+        num_codes: 128
+        code_dim: 256
+
+  - name: "exp_separate_head"
+    train:
+      eval_every: 200
+    data:
+      pack:
+        clip_len: 5
+    model:
+      use_semantic_aux: true
+      shared_semantic_head: false
+      semantic_aux_weight: 0.1
+      vq:
+        num_codes: 128
+        code_dim: 256
