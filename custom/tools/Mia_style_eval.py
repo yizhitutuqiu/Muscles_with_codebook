@@ -84,43 +84,71 @@ def _root_center_joints3d(joints3d: torch.Tensor, root_index: int) -> torch.Tens
     return joints3d - root
 
 
-def _compute_official_metrics(pred: np.ndarray, gt: np.ndarray) -> Dict[str, Any]:
+def _compute_official_metrics(pred: np.ndarray, gt: np.ndarray, task: str = "pose2emg") -> Dict[str, Any]:
     pred = np.asarray(pred, dtype=np.float64)
     gt = np.asarray(gt, dtype=np.float64)
     if pred.shape != gt.shape:
         raise ValueError(f"Shape mismatch: pred={pred.shape}, gt={gt.shape}")
-    if pred.ndim != 2 or pred.shape[1] != 8:
-        raise ValueError(f"Expected flattened EMG shape (N,8), got {pred.shape}")
 
-    sq_err = np.square(pred - gt)
-    abs_err = np.abs(pred - gt)
-    overall_mse = float(np.mean(sq_err))
-    overall_rmse = float(math.sqrt(overall_mse))
-    overall_mae = float(np.mean(abs_err))
+    if task == "pose2emg":
+        if pred.ndim != 2 or pred.shape[1] != 8:
+            raise ValueError(f"Expected flattened EMG shape (N,8), got {pred.shape}")
 
-    channel_mse = np.mean(sq_err, axis=0)
-    channel_rmse = np.sqrt(channel_mse)
-    channel_mae = np.mean(abs_err, axis=0)
-    per_channel = []
-    for idx, name in enumerate(MUSCLE_NAMES):
-        per_channel.append(
-            {
-                "index": idx,
-                "name": name,
-                "mse": float(channel_mse[idx]),
-                "rmse": float(channel_rmse[idx]),
-                "mae": float(channel_mae[idx]),
-            }
-        )
+        sq_err = np.square(pred - gt)
+        abs_err = np.abs(pred - gt)
+        overall_mse = float(np.mean(sq_err))
+        overall_rmse = float(math.sqrt(overall_mse))
+        overall_mae = float(np.mean(abs_err))
 
-    return {
-        "official_global_mse": overall_mse,
-        "official_global_rmse": overall_rmse,
-        "official_global_mae": overall_mae,
-        "num_frames": int(pred.shape[0]),
-        "num_values": int(pred.size),
-        "per_channel": per_channel,
-    }
+        channel_mse = np.mean(sq_err, axis=0)
+        channel_rmse = np.sqrt(channel_mse)
+        channel_mae = np.mean(abs_err, axis=0)
+        per_channel = []
+        for idx, name in enumerate(MUSCLE_NAMES):
+            per_channel.append(
+                {
+                    "index": idx,
+                    "name": name,
+                    "mse": float(channel_mse[idx]),
+                    "rmse": float(channel_rmse[idx]),
+                    "mae": float(channel_mae[idx]),
+                }
+            )
+
+        return {
+            "official_global_mse": overall_mse,
+            "official_global_rmse": overall_rmse,
+            "official_global_mae": overall_mae,
+            "num_frames": int(pred.shape[0]),
+            "num_values": int(pred.size),
+            "per_channel": per_channel,
+        }
+    else:  # emg2pose
+        if pred.ndim != 3 or pred.shape[1:] != (25, 3):
+            raise ValueError(f"Expected flattened Pose shape (N, 25, 3), got {pred.shape}")
+        
+        # Calculate MPJPE (Mean Per Joint Position Error)
+        # L2 distance between predicted and GT joints
+        diff = pred - gt
+        # l2_dist: (N, 25)
+        l2_dist = np.sqrt(np.sum(np.square(diff), axis=-1))
+        mpjpe = float(np.mean(l2_dist))
+        
+        # We also calculate MSE for completeness
+        sq_err = np.square(diff)
+        overall_mse = float(np.mean(sq_err))
+        overall_rmse = float(math.sqrt(overall_mse))
+        
+        # We store MPJPE into the "official_global_rmse" key to reuse the summary csv generation logic,
+        # but the meaning for emg2pose is MPJPE
+        return {
+            "official_global_mse": overall_mse,
+            "official_global_rmse": mpjpe,  # Reusing this key for MPJPE
+            "official_global_mae": mpjpe,   # For MPJPE, MAE is often synonymous with mean L2 distance
+            "num_frames": int(pred.shape[0]),
+            "num_values": int(pred.size),
+            "per_channel": [], # No channel metrics for pose
+        }
 
 
 def _emg_standardizer_std(standardizer) -> torch.Tensor:
@@ -233,6 +261,7 @@ def _build_stage2_from_ckpt(
         tcn_cfg = TCNBackboneConfig(**_t)
 
     stage2_cfg = Stage2Pose2EMGConfig(
+        task=str(mcfg.get("task", "pose2emg")).strip().lower(),
         token_count=int(mcfg.get("token_count", 63)),
         dim=dim,
         cont_encoder_type=str(mcfg.get("cont_encoder_type", "mixer")).strip().lower(),
@@ -260,10 +289,13 @@ def _build_stage2_from_ckpt(
     return model, cfg, stage1_path, stage1
 
 
-def _load_official_model(ckpt_path: Path, device: torch.device):
-    from musclesinaction.models.modelposetoemg import TransformerEnc  # type: ignore
+def _load_official_model(ckpt_path: Path, device: torch.device, task: str = "pose2emg"):
+    if task == "emg2pose":
+        from musclesinaction.models.modelemgtopose import TransformerEnc  # type: ignore
+    else:
+        from musclesinaction.models.modelposetoemg import TransformerEnc  # type: ignore
 
-    payload = torch.load(ckpt_path, map_location="cpu")
+    payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     if not isinstance(payload, dict):
         raise RuntimeError(f"Unsupported checkpoint type: {type(payload)}")
 
@@ -387,6 +419,7 @@ def _eval_stage2_on_filelist(
     joints3d_root_index: int,
 ) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]]]:
     pred_mode = str(train_cfg.get("model", {}).get("emg_pred_mode", "full")).strip().lower()
+    task = str(train_cfg.get("model", {}).get("task", "pose2emg")).strip().lower()
     emg_normalize_target = bool(train_cfg.get("data", {}).get("emg_normalize_target", False))
     stage1_emg = getattr(stage1, "emg", None)
     emg_standardizer = getattr(stage1_emg, "standardizer", None) if stage1_emg else None
@@ -409,32 +442,66 @@ def _eval_stage2_on_filelist(
 
         if joints3d_root_center:
             joints3d = _root_center_joints3d(joints3d, joints3d_root_index)
-        gt_bt8 = emg.permute(0, 2, 1).contiguous()
+            
+        if task == "pose2emg":
+            gt = emg.permute(0, 2, 1).contiguous()
+            inputs = joints3d
+        else:
+            gt = joints3d
+            inputs = emg.permute(0, 2, 1).contiguous()
+
         with torch.no_grad():
-            out = model(joints3d, cond=cond)
-            pred_bt8 = out["emg_pred"]
-            if use_emg_denorm:
-                mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(pred_bt8.shape[1]), device=device)
-                pred_bt8 = pred_bt8 * std_bt8 + mean_bt8
-        pred_np = pred_bt8.detach().cpu().numpy()
-        gt_np = gt_bt8.detach().cpu().numpy()
-        pred_all.append(pred_np.reshape(pred_np.shape[0] * pred_np.shape[1], 8))
-        gt_all.append(gt_np.reshape(gt_np.shape[0] * gt_np.shape[1], 8))
+            out = model(inputs, cond=cond)
+            pred = out["pred"]
+            if task == "pose2emg" and use_emg_denorm:
+                mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(pred.shape[1]), device=device)
+                pred = pred * std_bt8 + mean_bt8
+                
+        pred_np = pred.detach().cpu().numpy()
+        gt_np = gt.detach().cpu().numpy()
+        
+        b, t = gt_np.shape[0], gt_np.shape[1]
+        
+        if task == "pose2emg":
+            pred_all.append(pred_np.reshape(b * t, 8))
+            gt_all.append(gt_np.reshape(b * t, 8))
+        else:
+            # For emg2pose, pred is (B, T, 25, 3)
+            pred_all.append(pred_np.reshape(b * t, 25, 3))
+            gt_all.append(gt_np.reshape(b * t, 25, 3))
 
         filepaths = _get_filepaths_from_batch(batch, int(gt_np.shape[0]))
         for i in range(int(gt_np.shape[0])):
             seq_sq_err = np.square(pred_np[i] - gt_np[i])
             seq_abs_err = np.abs(pred_np[i] - gt_np[i])
-            row = {
-                "eval_index": sample_counter,
-                "filepath": filepaths[i],
-                "frames": int(gt_np.shape[1]),
-                "mse": float(np.mean(seq_sq_err)),
-                "rmse": float(math.sqrt(np.mean(seq_sq_err))),
-                "mae": float(np.mean(seq_abs_err)),
-            }
-            for ch in range(8):
-                row[f"rmse_{MUSCLE_NAMES[ch]}"] = float(math.sqrt(np.mean(seq_sq_err[:, ch])))
+            
+            if task == "pose2emg":
+                row = {
+                    "eval_index": sample_counter,
+                    "filepath": filepaths[i],
+                    "frames": int(gt_np.shape[1]),
+                    "mse": float(np.mean(seq_sq_err)),
+                    "rmse": float(math.sqrt(np.mean(seq_sq_err))),
+                    "mae": float(np.mean(seq_abs_err)),
+                }
+                for ch in range(8):
+                    row[f"rmse_{MUSCLE_NAMES[ch]}"] = float(math.sqrt(np.mean(seq_sq_err[:, ch])))
+            else:
+                # Calculate MPJPE for this sequence
+                diff = pred_np[i] - gt_np[i]
+                l2_dist = np.sqrt(np.sum(np.square(diff), axis=-1))
+                mpjpe = float(np.mean(l2_dist))
+                row = {
+                    "eval_index": sample_counter,
+                    "filepath": filepaths[i],
+                    "frames": int(gt_np.shape[1]),
+                    "mse": float(np.mean(seq_sq_err)),
+                    "rmse": mpjpe,  # We put MPJPE in rmse column for backward compatibility
+                    "mae": mpjpe,
+                }
+                for ch in range(8):
+                    row[f"rmse_{MUSCLE_NAMES[ch]}"] = 0.0 # Placeholder
+                    
             per_sequence_rows.append(row)
             sample_counter += 1
 
@@ -448,6 +515,7 @@ def _eval_official_model_on_filelist(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
+    task: str = "pose2emg",
 ) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]]]:
     pred_all: List[np.ndarray] = []
     gt_all: List[np.ndarray] = []
@@ -467,21 +535,36 @@ def _eval_official_model_on_filelist(
         if emg.shape != (b, 8, t):
             raise ValueError(f"Expected emg_values (B,8,T), got {tuple(emg.shape)}")
 
-        skeleton = joints3d.reshape(b, t, 75)
-        gt_bt8 = emg.permute(0, 2, 1).contiguous()
+        if task == "pose2emg":
+            skeleton = joints3d.reshape(b, t, 75)
+            gt_bt8 = emg.permute(0, 2, 1).contiguous()
 
-        with torch.no_grad():
-            # Ensure the condition tensor is on the same device as the model's parameters.
-            cond = cond.to(device)
-            pred_b8t = model(skeleton, cond)
-        if pred_b8t.ndim != 3 or pred_b8t.shape != (b, 8, t):
-            raise RuntimeError(f"Unexpected official model output shape: {tuple(pred_b8t.shape)}")
-        pred_bt8 = pred_b8t.permute(0, 2, 1).contiguous()
+            with torch.no_grad():
+                # Ensure the condition tensor is on the same device as the model's parameters.
+                cond = cond.to(device)
+                pred_b8t = model(skeleton, cond)
+            if pred_b8t.ndim != 3 or pred_b8t.shape != (b, 8, t):
+                raise RuntimeError(f"Unexpected official model output shape: {tuple(pred_b8t.shape)}")
+            pred_bt8 = pred_b8t.permute(0, 2, 1).contiguous()
 
-        pred_np = pred_bt8.detach().cpu().numpy()
-        gt_np = gt_bt8.detach().cpu().numpy()
-        pred_all.append(pred_np.reshape(b * t, 8))
-        gt_all.append(gt_np.reshape(b * t, 8))
+            pred_np = pred_bt8.detach().cpu().numpy()
+            gt_np = gt_bt8.detach().cpu().numpy()
+            pred_all.append(pred_np.reshape(b * t, 8))
+            gt_all.append(gt_np.reshape(b * t, 8))
+        else: # emg2pose
+            with torch.no_grad():
+                cond = cond.to(device)
+                # Official emg2pose model takes emg as input and returns pose
+                pred_pose_bt75 = model(emg, cond)
+            if pred_pose_bt75.ndim != 3 or pred_pose_bt75.shape != (b, t, 75):
+                raise RuntimeError(f"Unexpected official model output shape: {tuple(pred_pose_bt75.shape)}")
+            
+            pred_pose = pred_pose_bt75.reshape(b, t, 25, 3)
+            pred_np = pred_pose.detach().cpu().numpy()
+            gt_np = joints3d.detach().cpu().numpy()
+            
+            pred_all.append(pred_np.reshape(b * t, 25, 3))
+            gt_all.append(gt_np.reshape(b * t, 25, 3))
 
         filepaths = _get_filepaths_from_batch(batch, int(gt_np.shape[0]))
         for i in range(int(gt_np.shape[0])):
@@ -631,7 +714,7 @@ def _is_exercise_name(val_filelist: str) -> bool:
     return True
 
 
-def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str]) -> Path:
+def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str], task: str = "pose2emg") -> Path:
     rows = []
     with open(summary_csv_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -646,13 +729,15 @@ def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str]) ->
         rmse = r.get("official_global_rmse", None)
 
         if proto == "id_exercises" or _is_exercise_name(val_name):
+            val_name = val_name.replace("val", "").replace(".txt", "")
             if method not in methods:
                 continue
             if val_name not in table:
                 table[val_name] = {}
             if rmse is not None and str(rmse).strip():
                 try:
-                    table[val_name][method] = f"{float(rmse):.2f}"
+                    format_str = "{:.3f}" if task == "emg2pose" else "{:.2f}"
+                    table[val_name][method] = format_str.format(float(rmse))
                 except Exception:
                     pass
 
@@ -681,7 +766,8 @@ def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str]) ->
         avg_row = ["Average"]
         for m in methods:
             if method_counts[m] > 0:
-                avg_row.append(f"{method_sums[m] / method_counts[m]:.2f}")
+                format_str = "{:.3f}" if task == "emg2pose" else "{:.2f}"
+                avg_row.append(format_str.format(method_sums[m] / method_counts[m]))
             else:
                 avg_row.append("")
         writer.writerow(avg_row)
@@ -744,6 +830,7 @@ def main() -> None:
     stage2_train_cfg = None
     stage2_stage1 = None
     stage2_ckpt_path = None
+    task = "pose2emg"
     if stage2_enabled:
         m = methods_cfg.get("stage2", {}) or {}
         ckpt = Path(str(m.get("checkpoint", ""))).expanduser()
@@ -758,20 +845,21 @@ def main() -> None:
         stage2_model, stage2_train_cfg, _, stage2_stage1 = _build_stage2_from_ckpt(
             stage2_ckpt_path, device=device, stage1_override_ckpt=stage1_override_path
         )
+        task = str(stage2_train_cfg.get("model", {}).get("task", "pose2emg")).strip().lower()
 
     official_cond_model = None
     official_cond_ckpt = None
-    if official_cond_enabled:
+    if official_cond_enabled and task != "emg2pose":
         m = methods_cfg.get("official_cond", {}) or {}
         ckpt = Path(str(m.get("checkpoint", "pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"))).expanduser()
         official_cond_ckpt = ckpt if ckpt.is_absolute() else (mia_root / ckpt).resolve()
         if not official_cond_ckpt.exists():
             raise FileNotFoundError(f"Official cond checkpoint not found: {official_cond_ckpt}")
-        official_cond_model, _, _ = _load_official_model(official_cond_ckpt, device=device)
+        official_cond_model, _, _ = _load_official_model(official_cond_ckpt, device=device, task=task)
 
     official_nocond_model = None
     official_nocond_ckpt = None
-    if official_nocond_enabled:
+    if official_nocond_enabled and task != "emg2pose":
         m = methods_cfg.get("official_nocond", {}) or {}
         cfg_path_val = str(m.get("checkpoint", ""))
         
@@ -788,7 +876,7 @@ def main() -> None:
             
         if not official_nocond_ckpt.exists():
             raise FileNotFoundError(f"Official nocond checkpoint not found: {official_nocond_ckpt}")
-        official_nocond_model, _, _ = _load_official_model(official_nocond_ckpt, device=device)
+        official_nocond_model, _, _ = _load_official_model(official_nocond_ckpt, device=device, task=task)
 
     retrieval_cfg = methods_cfg.get("retrieval", {}) or {}
     retrieval_device = torch.device(str((runtime.get("retrieval", {}) or {}).get("device", "cpu")))
@@ -839,7 +927,8 @@ def main() -> None:
                 joints3d_root_center=joints3d_root_center,
                 joints3d_root_index=joints3d_root_index,
             )
-            metrics = _compute_official_metrics(pred_cat, gt_cat)
+            task = str(stage2_train_cfg.get("model", {}).get("task", "pose2emg")).strip().lower()
+            metrics = _compute_official_metrics(pred_cat, gt_cat, task=task)
             run_dir = case_dir / "stage2"
             run_dir.mkdir(parents=True, exist_ok=True)
             _write_csv_rows(
@@ -882,7 +971,7 @@ def main() -> None:
                 }
             )
 
-        if official_cond_enabled:
+        if official_cond_enabled and official_cond_model is not None:
             loader = _build_loader(
                 filelist_path=case.val_filelist,
                 split=case.split,
@@ -895,8 +984,8 @@ def main() -> None:
                 max_samples=max_samples,
                 device=device,
             )
-            pred_cat, gt_cat, per_seq = _eval_official_model_on_filelist(model=official_cond_model, loader=loader, device=device)
-            metrics = _compute_official_metrics(pred_cat, gt_cat)
+            pred_cat, gt_cat, per_seq = _eval_official_model_on_filelist(model=official_cond_model, loader=loader, device=device, task=task)
+            metrics = _compute_official_metrics(pred_cat, gt_cat, task=task)
             run_dir = case_dir / "official_cond"
             run_dir.mkdir(parents=True, exist_ok=True)
             _write_csv_rows(
@@ -939,7 +1028,7 @@ def main() -> None:
                 }
             )
 
-        if official_nocond_enabled:
+        if official_nocond_enabled and official_nocond_model is not None:
             loader = _build_loader(
                 filelist_path=case.val_filelist,
                 split=case.split,
@@ -952,8 +1041,8 @@ def main() -> None:
                 max_samples=max_samples,
                 device=device,
             )
-            pred_cat, gt_cat, per_seq = _eval_official_model_on_filelist(model=official_nocond_model, loader=loader, device=device)
-            metrics = _compute_official_metrics(pred_cat, gt_cat)
+            pred_cat, gt_cat, per_seq = _eval_official_model_on_filelist(model=official_nocond_model, loader=loader, device=device, task=task)
+            metrics = _compute_official_metrics(pred_cat, gt_cat, task=task)
             run_dir = case_dir / "official_nocond"
             run_dir.mkdir(parents=True, exist_ok=True)
             _write_csv_rows(
@@ -1094,7 +1183,7 @@ def main() -> None:
             used_methods.append(m)
             
     # Process and save the summary with averages
-    processed_csv = _process_and_save_summary(summary_csv, used_methods)
+    processed_csv = _process_and_save_summary(summary_csv, used_methods, task=task)
 
     print("[MiaStyleEval] out_root =", out_root)
     print("[MiaStyleEval] summary_csv =", summary_csv)

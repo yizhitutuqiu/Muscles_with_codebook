@@ -62,35 +62,60 @@ def main():
         # We need to construct a specific config for this experiment
         ckpt_path = exp_dir / "best.pt"
         
-        # Load the training config to get stage1 path if possible
+        # Load the training config to get stage1 path if possible and determine task
         train_cfg_path = exp_dir / "config.yaml"
         stage1_ckpt = ""
+        task = "pose2emg"
         if train_cfg_path.exists():
             with open(train_cfg_path, "r") as f:
                 t_cfg = yaml.safe_load(f)
                 if t_cfg and "stage1" in t_cfg:
                     stage1_ckpt = t_cfg["stage1"].get("checkpoint", "")
+                if t_cfg and "model" in t_cfg:
+                    task = str(t_cfg["model"].get("task", "pose2emg")).strip().lower()
 
         eval_cfg = copy.deepcopy(base_eval_cfg)
         eval_cfg["output"] = {"out_dir": str(exp_dir / "eval_results")}
-        eval_cfg["methods"] = {
-            "stage2": {
-                "enabled": True,
-                "checkpoint": str(ckpt_path),
-                "stage1_checkpoint": stage1_ckpt
-            },
-            "official_cond": {
-                "enabled": True,
-                "checkpoint": "pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"
-            },
-            "official_nocond": {
-                "enabled": True,
-                "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260410_102342/checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth"
-            },
-            "retrieval": {
-                "enabled": False
+        
+        if task == "emg2pose":
+            # For emg2pose, disable official models as they are broken in the official repo
+            eval_cfg["methods"] = {
+                "stage2": {
+                    "enabled": True,
+                    "checkpoint": str(ckpt_path),
+                    "stage1_checkpoint": stage1_ckpt
+                },
+                "official_cond": {
+                    "enabled": False,
+                    "checkpoint": ""
+                },
+                "official_nocond": {
+                    "enabled": False,
+                    "checkpoint": ""
+                },
+                "retrieval": {
+                    "enabled": False
+                }
             }
-        }
+        else:
+            eval_cfg["methods"] = {
+                "stage2": {
+                    "enabled": True,
+                    "checkpoint": str(ckpt_path),
+                    "stage1_checkpoint": stage1_ckpt
+                },
+                "official_cond": {
+                    "enabled": True,
+                    "checkpoint": "pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"
+                },
+                "official_nocond": {
+                    "enabled": True,
+                    "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260410_102342/checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth"
+                },
+                "retrieval": {
+                    "enabled": False
+                }
+            }
         
         # Save temp config
         temp_cfg_path = exp_dir / "temp_eval.yaml"
@@ -99,7 +124,7 @@ def main():
             
         # Run eval
         cmd = [
-            "python", "custom/tools/Mia_style_eval.py",
+            "/data/litengmo/anaconda3/envs/gvhmr/bin/python", "custom/tools/Mia_style_eval.py",
             "--config", str(temp_cfg_path)
         ]
         
