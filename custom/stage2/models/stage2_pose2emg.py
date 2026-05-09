@@ -26,6 +26,7 @@ NUM_JOINTS: int = 25
 
 @dataclass(frozen=True)
 class Stage2Pose2EMGConfig:
+    task: str = "pose2emg"  # "pose2emg" or "emg2pose"
     token_count: int = 63
     dim: int = 256
     # 连续分支：mixer=75 维→63 Token（原）；joint_25=25 关节各 3 维→25 Token（论文对齐，保留物理拓扑）
@@ -60,8 +61,8 @@ class Stage2Pose2EMGConfig:
 class Stage2Pose2EMG(nn.Module):
     """
     Stage II:
-      joints3d sequence -> (1) discrete tokens via frozen stage1 codebook + (2) continuous tokens via trainable encoder
-      -> 可插拔融合 (dcsa / residual_add) -> 可插拔时序 (dstformer / tcn) -> EMG regression.
+      (pose2emg) joints3d sequence -> discrete tokens + continuous tokens -> fusion -> temporal -> EMG regression.
+      (emg2pose) emg sequence -> discrete tokens + continuous tokens -> fusion -> temporal -> joints3d regression.
 
     This module is self-contained and does NOT modify Stage I. Stage I model is injected and frozen.
     """
@@ -69,6 +70,7 @@ class Stage2Pose2EMG(nn.Module):
     def __init__(self, cfg: Stage2Pose2EMGConfig, *, stage1: FrameCodebookModel):
         super().__init__()
         self.cfg = cfg
+        self.task = str(getattr(cfg, "task", "pose2emg")).strip().lower()
         self.stage1 = stage1
         for p in self.stage1.parameters():
             p.requires_grad_(False)
@@ -76,51 +78,83 @@ class Stage2Pose2EMG(nn.Module):
 
         dim = int(cfg.dim)
         cont_type = str(cfg.cont_encoder_type).strip().lower()
-        if cont_type == "joint_25":
-            # 小 MLP + LayerNorm，避免“弱 Query”冷启动：单层 Linear 无法提出有意义的 Query
-            joint_hidden = int(cfg.cont_joint_hidden_dim)
-            self.cont_encoder = nn.Sequential(
-                nn.Linear(3, joint_hidden),
-                nn.GELU(),
-                nn.Linear(joint_hidden, dim),
-                nn.LayerNorm(dim),
-            )
-            self._cont_token_count = NUM_JOINTS
-            # 时空位置编码：让 25 个 Token 拥有空间身份和时间顺序，在送入 DCSA 前注入
-            max_t = int(getattr(cfg, "max_seq_len", 256))
-            self.spatial_pe = nn.Parameter(torch.empty(1, 1, NUM_JOINTS, dim))
-            self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
-            nn.init.normal_(self.spatial_pe, std=0.02)
-            nn.init.normal_(self.temporal_pe, std=0.02)
-        elif cont_type == "stgcn":
-            # H6-B: ST-GCN continuous encoder
-            from .st_gcn import AdaptiveGCNEncoder
-            self.cont_encoder = AdaptiveGCNEncoder(
-                in_channels=3, 
-                hidden_dim=int(cfg.cont_joint_hidden_dim), 
-                out_dim=dim, 
-                num_nodes=NUM_JOINTS, 
-                num_layers=3
-            )
-            self._cont_token_count = NUM_JOINTS
-            # 时空位置编码
-            max_t = int(getattr(cfg, "max_seq_len", 256))
-            self.spatial_pe = nn.Parameter(torch.empty(1, 1, NUM_JOINTS, dim))
-            self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
-            nn.init.normal_(self.spatial_pe, std=0.02)
-            nn.init.normal_(self.temporal_pe, std=0.02)
+        
+        if self.task == "emg2pose":
+            # For EMG to Pose, we treat EMG 8 channels as input
+            # If they requested 'joint_25' or 'emg_8', we use an 8-token spatial layout
+            if cont_type in ("emg_8", "joint_25"):
+                joint_hidden = int(cfg.cont_joint_hidden_dim)
+                self.cont_encoder = nn.Sequential(
+                    nn.Linear(1, joint_hidden),
+                    nn.GELU(),
+                    nn.Linear(joint_hidden, dim),
+                    nn.LayerNorm(dim),
+                )
+                self._cont_token_count = 8
+                max_t = int(getattr(cfg, "max_seq_len", 256))
+                self.spatial_pe = nn.Parameter(torch.empty(1, 1, 8, dim))
+                self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
+                nn.init.normal_(self.spatial_pe, std=0.02)
+                nn.init.normal_(self.temporal_pe, std=0.02)
+            else:
+                # Default to MLP Mixer treating the 8 channels as flat input
+                self.spatial_pe = None
+                self.temporal_pe = None
+                mixer_cfg = MLPMixerConfig(
+                    in_dim=8,
+                    token_count=int(cfg.token_count),
+                    code_dim=dim,
+                    hidden_dim=int(cfg.cont_hidden_dim),
+                    num_layers=4,
+                )
+                self.cont_encoder = FourLayerMLPMixer(mixer_cfg)
+                self._cont_token_count = int(cfg.token_count)
         else:
-            self.spatial_pe = None
-            self.temporal_pe = None
-            mixer_cfg = MLPMixerConfig(
-                in_dim=75,
-                token_count=int(cfg.token_count),
-                code_dim=dim,
-                hidden_dim=int(cfg.cont_hidden_dim),
-                num_layers=4,
-            )
-            self.cont_encoder = FourLayerMLPMixer(mixer_cfg)
-            self._cont_token_count = int(cfg.token_count)
+            if cont_type == "joint_25":
+                # 小 MLP + LayerNorm，避免“弱 Query”冷启动：单层 Linear 无法提出有意义的 Query
+                joint_hidden = int(cfg.cont_joint_hidden_dim)
+                self.cont_encoder = nn.Sequential(
+                    nn.Linear(3, joint_hidden),
+                    nn.GELU(),
+                    nn.Linear(joint_hidden, dim),
+                    nn.LayerNorm(dim),
+                )
+                self._cont_token_count = NUM_JOINTS
+                # 时空位置编码：让 25 个 Token 拥有空间身份和时间顺序，在送入 DCSA 前注入
+                max_t = int(getattr(cfg, "max_seq_len", 256))
+                self.spatial_pe = nn.Parameter(torch.empty(1, 1, NUM_JOINTS, dim))
+                self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
+                nn.init.normal_(self.spatial_pe, std=0.02)
+                nn.init.normal_(self.temporal_pe, std=0.02)
+            elif cont_type == "stgcn":
+                # H6-B: ST-GCN continuous encoder
+                from .st_gcn import AdaptiveGCNEncoder
+                self.cont_encoder = AdaptiveGCNEncoder(
+                    in_channels=3, 
+                    hidden_dim=int(cfg.cont_joint_hidden_dim), 
+                    out_dim=dim, 
+                    num_nodes=NUM_JOINTS, 
+                    num_layers=3
+                )
+                self._cont_token_count = NUM_JOINTS
+                # 时空位置编码
+                max_t = int(getattr(cfg, "max_seq_len", 256))
+                self.spatial_pe = nn.Parameter(torch.empty(1, 1, NUM_JOINTS, dim))
+                self.temporal_pe = nn.Parameter(torch.empty(1, max_t, 1, dim))
+                nn.init.normal_(self.spatial_pe, std=0.02)
+                nn.init.normal_(self.temporal_pe, std=0.02)
+            else:
+                self.spatial_pe = None
+                self.temporal_pe = None
+                mixer_cfg = MLPMixerConfig(
+                    in_dim=75,
+                    token_count=int(cfg.token_count),
+                    code_dim=dim,
+                    hidden_dim=int(cfg.cont_hidden_dim),
+                    num_layers=4,
+                )
+                self.cont_encoder = FourLayerMLPMixer(mixer_cfg)
+                self._cont_token_count = int(cfg.token_count)
 
         fusion_type_str = str(cfg.fusion_type).strip().lower()
         if fusion_type_str in ("dcsa_asymmetric", "dcsa_asym", "asymmetric_dcsa"):
@@ -171,34 +205,45 @@ class Stage2Pose2EMG(nn.Module):
             mixer_hidden_dim=int(cfg.emg_mixer_hidden_dim),
             mixer_num_layers=int(cfg.emg_mixer_num_layers),
             flatten_hidden_dim=int(cfg.emg_hidden),
+            out_dim=8 if self.task == "pose2emg" else 75
         )
         self.emg_head = build_emg_head(cfg.emg_head_type, emg_cfg)
         if str(cfg.emg_pred_mode).strip().lower() == "residual":
             zero_init_final_output(self.emg_head)
 
     @torch.no_grad()
-    def _stage1_discrete_tokens_bt(self, joints3d: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        if joints3d.ndim != 4 or joints3d.shape[-2:] != (25, 3):
-            raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(joints3d.shape)}")
-        b, t, _, _ = joints3d.shape
-        mod = self.stage1.joints3d
+    def _stage1_discrete_tokens_bt(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        # inputs can be joints3d (B,T,25,3) or emg (B,T,8) depending on task
+        b, t = inputs.shape[0], inputs.shape[1]
+        
+        if self.task == "pose2emg":
+            if inputs.ndim != 4 or inputs.shape[-2:] != (25, 3):
+                raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(inputs.shape)}")
+            mod = self.stage1.joints3d
+            expected_frame_dim = 75
+            x_flat = inputs.reshape(b * t, 75)
+        else:
+            if inputs.ndim != 3 or inputs.shape[-1] != 8:
+                raise ValueError(f"Expected emg (B,T,8), got {tuple(inputs.shape)}")
+            mod = self.stage1.emg
+            expected_frame_dim = 8
+            x_flat = inputs.reshape(b * t, 8)
+
         stage1_in_dim = int(mod.cfg.in_dim)
         stage1_token_count = int(mod.cfg.token_count)
         stage1_code_dim = int(mod.cfg.code_dim)
         if stage1_code_dim != int(self.cfg.dim):
             raise ValueError(f"Stage1 code_dim={stage1_code_dim} != Stage2 dim={int(self.cfg.dim)}")
 
-        # Case A: unified clip-level codebook (e.g. clip_len=5, token_count=1, in_dim=clip_len*75)
-        # We encode each clip into 1 token, then repeat it for all frames in that clip to form (B,T,token_count=1,dim).
-        if stage1_token_count == 1 and stage1_in_dim % 75 == 0 and stage1_in_dim != 75:
-            clip_len = stage1_in_dim // 75
+        # Case A: unified clip-level codebook
+        if stage1_token_count == 1 and stage1_in_dim % expected_frame_dim == 0 and stage1_in_dim != expected_frame_dim:
+            clip_len = stage1_in_dim // expected_frame_dim
             if int(t) % int(clip_len) != 0:
                 raise ValueError(
-                    f"Unified-clip Stage1 expects T divisible by clip_len. Got T={t}, clip_len={clip_len} "
-                    f"(stage1.in_dim={stage1_in_dim}=clip_len*75)."
+                    f"Unified-clip Stage1 expects T divisible by clip_len. Got T={t}, clip_len={clip_len}"
                 )
             num_clips = int(t) // int(clip_len)
-            x_clips = joints3d.reshape(b, num_clips, clip_len, 75).reshape(b * num_clips, stage1_in_dim)
+            x_clips = inputs.reshape(b, num_clips, clip_len, expected_frame_dim).reshape(b * num_clips, stage1_in_dim)
             x_n = mod.normalize(x_clips.float(), update=False)
             z_e = mod.encoder(x_n).view(b * num_clips, 1, stage1_code_dim)
             z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * num_clips, stage1_code_dim))
@@ -207,12 +252,11 @@ class Stage2Pose2EMG(nn.Module):
             idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
             return z_q, idx_bt, z_q_base
 
-        if stage1_in_dim == 75:
+        if stage1_in_dim == expected_frame_dim:
             if stage1_token_count != int(self.cfg.token_count):
                 raise ValueError(
                     f"Stage1 token_count={stage1_token_count} != Stage2 token_count={int(self.cfg.token_count)}"
                 )
-            x_flat = joints3d.reshape(b * t, 75)
             x_n = mod.normalize(x_flat.float(), update=False)
             z_e = mod.encoder(x_n).view(b * t, stage1_token_count, stage1_code_dim)
             z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * t * stage1_token_count, stage1_code_dim))
@@ -220,15 +264,14 @@ class Stage2Pose2EMG(nn.Module):
             idx_bt = idx.view(b, t, stage1_token_count)
             return z_q, idx_bt, None
 
-        expected_clip_dim = int(t) * 75
+        expected_clip_dim = int(t) * expected_frame_dim
         if stage1_in_dim != expected_clip_dim:
             raise ValueError(
-                f"Unsupported Stage1 joints3d.in_dim={stage1_in_dim}. "
-                f"Expected 75 (per-frame), {expected_clip_dim} (frame-aligned clip={t}*75), "
-                f"or clip_len*75 with token_count=1 (unified clip-level codebook)."
+                f"Unsupported Stage1 in_dim={stage1_in_dim}. "
+                f"Expected {expected_frame_dim} (per-frame), {expected_clip_dim} (frame-aligned clip)"
             )
             
-        x_clip = joints3d.reshape(b, expected_clip_dim)
+        x_clip = inputs.reshape(b, expected_clip_dim)
         x_n = mod.normalize(x_clip.float(), update=False)
         z_e = mod.encoder(x_n).view(b, stage1_token_count, stage1_code_dim)
         z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
@@ -236,7 +279,6 @@ class Stage2Pose2EMG(nn.Module):
         idx = idx.view(b, stage1_token_count)
         
         if stage1_token_count % int(t) != 0 and stage1_token_count != 1:
-            # For CIF or other variable length token counts, we broadcast the global tokens to all frames
             tokens_per_frame = stage1_token_count
             z_q_bt = z_q.unsqueeze(1).expand(b, t, tokens_per_frame, stage1_code_dim)
             idx_bt = idx.unsqueeze(1).expand(b, t, tokens_per_frame)
@@ -244,8 +286,7 @@ class Stage2Pose2EMG(nn.Module):
             tokens_per_frame = stage1_token_count // int(t)
             if tokens_per_frame != int(self.cfg.token_count):
                 raise ValueError(
-                    f"Stage1 tokens_per_frame={tokens_per_frame} != Stage2 token_count={int(self.cfg.token_count)}. "
-                    "For frame-aligned temporal codebook, Stage2 token_count must equal Stage1 token_count/T."
+                    f"Stage1 tokens_per_frame={tokens_per_frame} != Stage2 token_count={int(self.cfg.token_count)}"
                 )
             z_q_bt = z_q.view(b, t, tokens_per_frame, stage1_code_dim)
             idx_bt = idx.view(b, t, tokens_per_frame)
@@ -253,34 +294,44 @@ class Stage2Pose2EMG(nn.Module):
         z_q_clip_flat = z_q.reshape(b, stage1_token_count * stage1_code_dim)
         return z_q_bt, idx_bt, z_q_clip_flat
 
-    def forward(self, joints3d: torch.Tensor, cond: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+    def forward(self, inputs: torch.Tensor, cond: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
         时序网络：T 帧一起输入；每帧分别走离散/连续两路 + DCSA 得到融合特征，再送入 DSTFormer 做时空提取。
 
-        joints3d: (B, T, 25, 3)  (e.g. T=30; assumed already root-centered if desired)
+        inputs: (B, T, 25, 3) for pose2emg or (B, T, 8) for emg2pose
         cond: (B, 1) or (B,) or None
         return dict with:
-          emg_pred: (B, T, 8)
+          pred: (B, T, 8) for pose2emg or (B, T, 25, 3) for emg2pose
           idx_j3d:  (B, T, token_count)  code indices for analysis
         """
-        if joints3d.ndim != 4 or joints3d.shape[-2:] != (25, 3):
-            raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(joints3d.shape)}")
-        b, t, _, _ = joints3d.shape
-        x_flat = joints3d.reshape(b * t, 75)
+        b, t = inputs.shape[0], inputs.shape[1]
+        
+        if self.task == "pose2emg":
+            if inputs.ndim != 4 or inputs.shape[-2:] != (25, 3):
+                raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(inputs.shape)}")
+            x_flat = inputs.reshape(b * t, 75)
+        else:
+            if inputs.ndim != 3 or inputs.shape[-1] != 8:
+                raise ValueError(f"Expected emg (B,T,8), got {tuple(inputs.shape)}")
+            x_flat = inputs.reshape(b * t, 8)
 
-        z_disc_bt, idx_bt, z_disc_clip_flat = self._stage1_discrete_tokens_bt(joints3d)
+        z_disc_bt, idx_bt, z_disc_clip_flat = self._stage1_discrete_tokens_bt(inputs)
 
         # Branch B: continuous tokens
         n_cont = self._cont_token_count
         cont_type = str(self.cfg.cont_encoder_type).strip().lower()
-        if cont_type in ("stgcn", "joint_25"):
+        
+        if self.task == "pose2emg" and cont_type in ("stgcn", "joint_25"):
             x_joints = x_flat.view(b * t, NUM_JOINTS, 3)
             z_cont = self.cont_encoder(x_joints)
+        elif self.task == "emg2pose" and cont_type in ("emg_8", "joint_25"):
+            x_emg = x_flat.view(b * t, 8, 1)
+            z_cont = self.cont_encoder(x_emg)
         else:
             z_cont = self.cont_encoder(x_flat).view(b * t, n_cont, int(self.cfg.dim))
 
         z_cont_bt = z_cont.view(b, t, n_cont, int(self.cfg.dim))
-        # 显式注入位置编码，让连续 Token 拥有空间身份和时间顺序
+        # 显式注入位置编码
         if self.spatial_pe is not None and self.temporal_pe is not None:
             z_cont_bt = z_cont_bt + self.spatial_pe + self.temporal_pe[:, :t, :, :]
             
@@ -294,13 +345,10 @@ class Stage2Pose2EMG(nn.Module):
             cond_feat = self.cond_proj(cond).view(b, 1, 1, int(self.cfg.dim))
             z_fused = z_fused + cond_feat
 
-        # 融合后时序，可插拔：dstformer / tcn -> (B,T,N,C)，保留 N 不做 mean
-        # 提取 codebook guided feature (B, T, D)
+        # 融合后时序，可插拔：dstformer / tcn -> (B,T,N,C)
         guide_feat = z_disc_bt.mean(dim=2) if z_disc_bt is not None else None
         
-        # 将 guide_feat 传入 temporal_encoder (如果它支持的话)
         if hasattr(self.temporal, "forward"):
-            # 检查 temporal 是否支持 guide 参数
             import inspect
             sig = inspect.signature(self.temporal.forward)
             if "guide" in sig.parameters:
@@ -310,37 +358,19 @@ class Stage2Pose2EMG(nn.Module):
         else:
             z_out = self.temporal(z_fused)
             
-        emg_out = self.emg_head(z_out)  # (B,T,8)，EMG 头输出：全量或残差由 emg_pred_mode 决定
+        net_out = self.emg_head(z_out)  # (B,T,8) or (B,T,75)
 
         pred_mode = str(self.cfg.emg_pred_mode).strip().lower()
         if pred_mode == "residual":
-            if self.stage1.emg is None:
-                raise RuntimeError("emg_pred_mode=residual 需要 Stage1 含有 EMG 模态（j3d->emg 交叉 decoder），当前 Stage1 无 emg。")
-            # Stage1 交叉重建 j3d->z_disc->emg.decoder 作为保底（归一化空间），反归一化到与 gt 一致
-            with torch.no_grad():
-                stage1_emg_in_dim = int(self.stage1.emg.cfg.in_dim)
-                if stage1_emg_in_dim == 8:
-                    n, c = int(self.cfg.token_count), int(self.cfg.dim)
-                    z_flat = z_disc_bt.reshape(b * t, n * c)
-                    emg_base = self.stage1.emg.decoder(z_flat)
-                    if self.stage1.emg.standardizer is not None:
-                        std = torch.sqrt(self.stage1.emg.standardizer.var + 1e-6)
-                        emg_base = emg_base * std + self.stage1.emg.standardizer.mean
-                    emg_base = emg_base.view(b, t, 8)
-                else:
-                    if z_disc_clip_flat is None:
-                        raise RuntimeError("Stage1 emg is clip-wise but clip tokens are missing.")
-                    emg_base = self.stage1.emg.decoder(z_disc_clip_flat)
-                    if self.stage1.emg.standardizer is not None:
-                        std = torch.sqrt(self.stage1.emg.standardizer.var + 1e-6)
-                        emg_base = emg_base * std + self.stage1.emg.standardizer.mean
-                    emg_base = emg_base.view(b, t, 8)
-            emg_pred = emg_base + emg_out
+            raise NotImplementedError("residual mode is not fully adapted for emg2pose yet.")
         else:
-            emg_pred = emg_out
+            pred = net_out
+            
+        if self.task == "emg2pose":
+            pred = pred.view(b, t, 25, 3)
 
         out = {
-            "emg_pred": emg_pred,
+            "pred": pred,
             "idx_j3d": idx_bt,
         }
         return out

@@ -1,0 +1,47 @@
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_emg2pose_ablation"
+csv_output: "custom/stage2/checkpoints/batch_emg2pose_ablation/summary.csv"
+
+tmux:
+  session_name: "batch_emg2pose"
+  attach: false
+  fail_if_exists: false
+
+gpus: [1, 3]
+
+experiments:
+  # 1. Absolute Baseline (Pure Continuous, No Codebook) for EMG2Pose
+  - name: "exp_emg2pose_ablation_pure_continuous"
+    experiment:
+      seed: 201
+    methods:
+      stage1:
+        encoder_decoder_only: true  # skip VQ
+    model:
+      task: "emg2pose"
+      cont_encoder_type: "emg_8"
+      fusion_type: "none"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # 2. H8 Baseline 8-Expert for EMG2Pose (Symmetric DCSA + Blind Routing)
+  - name: "exp_emg2pose_ablation_h8_baseline"
+    experiment:
+      seed: 202
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
+    model:
+      task: "emg2pose"
+      cont_encoder_type: "emg_8"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16

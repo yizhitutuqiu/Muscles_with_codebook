@@ -58,3 +58,18 @@
   - 既然 `clip5_tcn` 能够把动作切分为离散的词汇表（如 512 个不同的动作元），那么这本身就是一个极其强大的先验（Prior）。
   - 当前的 MoE 路由是盲目的（通过连续特征经过一层 Linear 预测概率），如果把离散化信息（Codebook Index 或是其 Embedding）直接提供给 MoE 的 Router，就可以强制将“不同的动作元”与“特定的专家”进行强绑定或提供强偏差（Bias）。
   - 这有望大幅度降低 Router 学习的难度，让不同的专家真正成为特定动作空间的专家（如：专家 A 处理踢腿类元动作，专家 B 处理上肢挥击类动作），从而将泛化能力推向极致。
+
+## 粒度错位与高质量语义 Codebook 的确立 (H8/H9 失败后的反思)
+**日期:** 2026-05-09
+**动作:** 反思 H8/H9 Guided MoE 失败原因，训练并确立带有语义边界的 Codebook，修复重大初始化 Bug，正式开启第一轮消融实验
+
+- **H8/H9 Guided MoE 策略失效**：
+  - 将 MoE 专家数从 4 提升到 8 后（H8 Baseline），无条件 RMSE 下降至 10.16。
+  - 然而，我们尝试用 Codebook 离散特征来显式引导 MoE 路由的策略（H8 的 Bias/Cross-Attn 引导，以及 H9 的 Gated/Hierarchical 等软引导）全部导致性能退化。
+  - **核心洞察（粒度错位）**：Codebook 提取的“Atomic Motion”代表的是宏观的动作片段语义，而肌肉信号（EMG）的预测在微观 Token 级别充满了高频抖动和非线性动态。强制用宏观语义去指挥微观的特征分配，破坏了网络自发寻找局部最优解的能力。**盲路由（Blind Routing）被证明是最优的**。
+- **重新审视先验：高质量的 Codebook (H9 v2)**：
+  - 既然显式干预下游网络走不通，我们转而从上游“先验”的质量入手。我们在 Stage 1 中引入了“共享双头辅助分类器 (Auxiliary Cross-Entropy)”，强制让连续编码和 VQ 量化后的离散特征同时包含明确的动作类别信息。
+  - **突破**：使用这个带语义约束的高质量 Codebook 结合 8 专家盲路由，模型突破了 H8 极限，平均 RMSE 降至 **10.14**。
+- **重大实验 Bug 修复与第一轮消融实验**：
+  - **发现并修复了隐藏 Bug**：由于 `musclesinaction.dataloader.data` 导入时存在全局强制 `random.seed(1)` 的副作用，导致之前多卡实验即使配置了不同的 Seed，其网络初始权重也完全一致（bit-wise identical）；同时修复了外部 YAML 未能覆盖 Checkpoint 内部配置的问题。
+  - **开启消融实验**：在修复上述问题后，为了论文论证“VQ-VAE Codebook 对肌肉重建的有效性”，设计并启动了第一轮严谨的消融实验（GPU 4: Pure Continuous, GPU 5: Continuous Prior, GPU 6: Standard Discrete Prior, GPU 7: Semantic Discrete Prior）。不同策略的初始 Loss 差异化证明实验配置已完美生效。

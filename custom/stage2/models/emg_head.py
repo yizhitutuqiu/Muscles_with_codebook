@@ -26,21 +26,22 @@ class EMGHeadConfig:
     mixer_num_layers: int = 4
     # flatten 专用
     flatten_hidden_dim: int = 256
+    out_dim: int = 8
 
 
 class MixerEMGHead(nn.Module):
     """
-    与 Stage1 Decoder 一致：对每帧的 N 个 token 做 MLP-Mixer 融合，再 Linear 到 8 维。
-    输入 (B,T,N,C)，输出 (B,T,8)。
+    与 Stage1 Decoder 一致：对每帧的 N 个 token 做 MLP-Mixer 融合，再 Linear 到 out_dim 维。
+    输入 (B,T,N,C)，输出 (B,T,out_dim)。
     """
 
     def __init__(self, cfg: EMGHeadConfig):
         super().__init__()
         self.cfg = cfg
         n, c = int(cfg.token_count), int(cfg.dim)
-        # FourLayerMLPMixerDecoder 的 in_dim 在 config 里表示 decoder 输出维（8）
+        # FourLayerMLPMixerDecoder 的 in_dim 在 config 里表示 decoder 输出维（8 或 75）
         mixer_cfg = MLPMixerConfig(
-            in_dim=8,
+            in_dim=int(cfg.out_dim),
             token_count=n,
             code_dim=c,
             hidden_dim=int(cfg.mixer_hidden_dim),
@@ -50,32 +51,32 @@ class MixerEMGHead(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, T, N, C) -> (B, T, 8)
+        x: (B, T, N, C) -> (B, T, out_dim)
         """
         if x.ndim != 4:
             raise ValueError(f"Expected (B,T,N,C), got {tuple(x.shape)}")
         b, t, n, c = x.shape
         flat = x.reshape(b * t, n * c)
         out = self.decoder(flat)
-        return out.view(b, t, 8)
+        return out.view(b, t, int(self.cfg.out_dim))
 
 
 class SpatialPoolingEMGHead(nn.Module):
     """
     论文严格对齐：Spatial Pooling (在关节点维度 J 上 mean) + 单层 FC。
-    F_pool = Average Pooling(F_pose)，再通过 FC 回归 8 维 EMG。
-    输入 (B,T,N,C)，输出 (B,T,8)。
+    F_pool = Average Pooling(F_pose)，再通过 FC 回归 out_dim 维。
+    输入 (B,T,N,C)，输出 (B,T,out_dim)。
     """
 
     def __init__(self, cfg: EMGHeadConfig):
         super().__init__()
         self.cfg = cfg
         c = int(cfg.dim)
-        self.fc = nn.Linear(c, 8)
+        self.fc = nn.Linear(c, int(cfg.out_dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, T, N, C) -> mean(dim=2) -> (B, T, C) -> Linear -> (B, T, 8)
+        x: (B, T, N, C) -> mean(dim=2) -> (B, T, C) -> Linear -> (B, T, out_dim)
         """
         if x.ndim != 4:
             raise ValueError(f"Expected (B,T,N,C), got {tuple(x.shape)}")
@@ -85,7 +86,7 @@ class SpatialPoolingEMGHead(nn.Module):
 
 class FlattenEMGHead(nn.Module):
     """
-    展平法：(B,T,N,C) -> (B,T,N*C) -> Linear -> GELU -> Linear -> (B,T,8)。
+    展平法：(B,T,N,C) -> (B,T,N*C) -> Linear -> GELU -> Linear -> (B,T,out_dim)。
     """
 
     def __init__(self, cfg: EMGHeadConfig):
@@ -97,12 +98,12 @@ class FlattenEMGHead(nn.Module):
             nn.LayerNorm(n * c),
             nn.Linear(n * c, hidden),
             nn.GELU(),
-            nn.Linear(hidden, 8),
+            nn.Linear(hidden, int(cfg.out_dim)),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        x: (B, T, N, C) -> (B, T, 8)
+        x: (B, T, N, C) -> (B, T, out_dim)
         """
         if x.ndim != 4:
             raise ValueError(f"Expected (B,T,N,C), got {tuple(x.shape)}")

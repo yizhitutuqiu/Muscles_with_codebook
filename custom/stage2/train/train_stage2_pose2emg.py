@@ -135,6 +135,7 @@ def _eval_one_epoch(
     sum_smooth_l1 = 0.0
     sum_mse = 0.0
     total_samples = 0
+    task = str(model.cfg.task).strip().lower()
     for batch in loader:
         joints3d = _to_tensor(batch["3dskeleton"]).to(device=device, dtype=torch.float32)  # (B,T,25,3)
         emg = _to_tensor(batch["emg_values"]).to(device=device, dtype=torch.float32)  # (B,8,T)
@@ -151,16 +152,22 @@ def _eval_one_epoch(
         if joints3d_root_center:
             joints3d = _root_center_joints3d(joints3d, joints3d_root_index)
             
-        gt = emg.permute(0, 2, 1).contiguous()  # (B,T,8)
+        if task == "pose2emg":
+            gt = emg.permute(0, 2, 1).contiguous()  # (B,T,8)
+            inputs = joints3d
+        else:
+            gt = joints3d
+            inputs = emg.permute(0, 2, 1).contiguous() # (B,T,8)
+
         t = int(gt.shape[1])
-        out = model(joints3d, cond=cond)
-        pred = out["emg_pred"]
-        if emg_standardizer is not None:
+        out = model(inputs, cond=cond)
+        pred = out["pred"]
+        if task == "pose2emg" and emg_standardizer is not None:
             mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=t, device=device)
             pred = pred * std_bt8 + mean_bt8
         sum_smooth_l1 += float(torch.nn.functional.smooth_l1_loss(pred, gt, reduction="sum").item())
         sum_mse += float(torch.nn.functional.mse_loss(pred, gt, reduction="sum").item())
-        total_samples += b_sz * t * 8
+        total_samples += b_sz * t * (8 if task == "pose2emg" else 75)
     
     model.train()
     
@@ -394,6 +401,7 @@ def _run_training(
     stage1 = _build_stage1_from_ckpt(stage1_ckpt, device=device, methods_cfg=cfg.get("methods", None))
 
     model_cfg = cfg["model"]
+    task = str(model_cfg.get("task", "pose2emg")).strip().lower()
     from custom.stage2.models.dcsa import DCSAConfig
     from custom.stage2.models.dstformer import DSTFormerConfig
     from custom.stage2.models.fusion import ResidualAddConfig
@@ -424,6 +432,7 @@ def _run_training(
         tcn_cfg = TCNBackboneConfig(**_t)
 
     stage2_cfg = Stage2Pose2EMGConfig(
+        task=task,
         token_count=int(model_cfg.get("token_count", 63)),
         dim=int(model_cfg.get("dim", 256)),
         cont_encoder_type=str(model_cfg.get("cont_encoder_type", "mixer")).strip().lower(),
@@ -618,17 +627,28 @@ def _run_training(
 
             if joints3d_root_center:
                 joints3d = _root_center_joints3d(joints3d, joints3d_root_index)
-            gt_raw = emg.permute(0, 2, 1).contiguous()
+            emg_raw = emg.permute(0, 2, 1).contiguous()
+            
+            if task == "pose2emg":
+                inputs = joints3d
+                gt_raw = emg_raw
+            else:
+                inputs = emg_raw
+                gt_raw = joints3d
 
-            out = model(joints3d, cond=cond)
-            pred = out["emg_pred"]
-            if use_emg_norm:
+            out = model(inputs, cond=cond)
+            pred = out["pred"]
+            if task == "pose2emg" and use_emg_norm:
                 mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(gt_raw.shape[1]), device=device)
                 gt_norm = (gt_raw - mean_bt8) / std_bt8
                 loss = torch.nn.functional.smooth_l1_loss(pred, gt_norm)
                 pred_raw = (pred * std_bt8 + mean_bt8).detach()
             else:
                 loss = torch.nn.functional.smooth_l1_loss(pred, gt_raw)
+                if task == "emg2pose":
+                    # 对于 emg2pose 任务，由于 3D 坐标的值域通常较小（如米级，差异在 0.01~0.1），
+                    # loss 会非常小导致梯度消失或学习缓慢。这里为了优化放大 1000 倍。
+                    loss = loss * 1000.0
                 pred_raw = pred.detach()
 
             optim.zero_grad(set_to_none=True)
@@ -649,10 +669,11 @@ def _run_training(
                     loss_mse = float(torch.nn.functional.mse_loss(pred_raw, gt_raw).item())
                     loss_mae = float(torch.nn.functional.l1_loss(pred_raw, gt_raw).item())
                     per_ch_smooth_l1 = []
-                    for ch in range(8):
-                        per_ch_smooth_l1.append(
-                            float(torch.nn.functional.smooth_l1_loss(pred_raw[..., ch], gt_raw[..., ch]).item())
-                        )
+                    if task == "pose2emg":
+                        for ch in range(8):
+                            per_ch_smooth_l1.append(
+                                float(torch.nn.functional.smooth_l1_loss(pred_raw[..., ch], gt_raw[..., ch]).item())
+                            )
                 msg = {
                     "step": step,
                     "loss_smooth_l1": current_loss_raw,
@@ -661,10 +682,11 @@ def _run_training(
                     "lr": optim.param_groups[0]["lr"],
                     "fps_frames_per_sec": float(fps),
                 }
-                if use_emg_norm:
+                if task == "pose2emg" and use_emg_norm:
                     msg["loss_smooth_l1_norm"] = current_loss
-                for ch, name in enumerate(MUSCLE_NAMES):
-                    msg[f"ch_{name}_smooth_l1"] = per_ch_smooth_l1[ch]
+                if task == "pose2emg":
+                    for ch, name in enumerate(MUSCLE_NAMES):
+                        msg[f"ch_{name}_smooth_l1"] = per_ch_smooth_l1[ch]
                 print("[Stage2Train]", msg)
 
             do_eval = (eval_every > 0) and (step % eval_every == 0 or step == max_steps)

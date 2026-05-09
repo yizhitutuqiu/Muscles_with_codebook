@@ -4,6 +4,7 @@ logs/
 output/
 save_train/
 archive/
+ablations/
 
 __pycache__/
 *.pyc
