@@ -5,6 +5,7 @@ import math
 import os
 import random
 import socket
+import numpy as np
 import sys
 import time
 from datetime import datetime
@@ -54,9 +55,12 @@ class _NullLogger:
 
 def _set_seed(seed: int) -> None:
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
@@ -174,7 +178,9 @@ def _eval_one_epoch(
     return float(avg_smooth_l1), float(avg_rmse)
 
 
-def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device) -> FrameCodebookModel:
+def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device, methods_cfg: Dict[str, Any] | None = None) -> FrameCodebookModel:
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Stage1 checkpoint not found: {ckpt_path}")
     payload = torch.load(ckpt_path, map_location="cpu")
     if not isinstance(payload, dict) or "config" not in payload or "model_state" not in payload:
         raise RuntimeError(f"Stage1 checkpoint missing keys (config/model_state): {ckpt_path}")
@@ -182,6 +188,14 @@ def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device) -> FrameCodeb
 
     # Build stage1 model from embedded config
     model_cfg = cfg["model"]
+
+    # 覆盖从 methods.stage1 传来的外部配置（如 encoder_decoder_only）
+    if methods_cfg is not None and "stage1" in methods_cfg:
+        stage1_overrides = methods_cfg["stage1"]
+        for k, v in stage1_overrides.items():
+            if k != "checkpoint":  # checkpoint path is handled separately
+                model_cfg[k] = v
+                print(f"[Stage1 Config Override] {k} = {v}")
     vq_kwargs = dict(model_cfg["vq"])
     if "beta" not in vq_kwargs and "commitment_weight" in vq_kwargs:
         vq_kwargs["beta"] = vq_kwargs.pop("commitment_weight")
@@ -366,8 +380,18 @@ def _run_training(
             pin_memory=(device.type == "cuda"),
         )
 
-    stage1_ckpt = Path(str(cfg["stage1"]["checkpoint"])).expanduser().resolve()
-    stage1 = _build_stage1_from_ckpt(stage1_ckpt, device=device)
+    if getattr(args, "stage1_checkpoint", None):
+        stage1_ckpt = Path(args.stage1_checkpoint)
+    elif "stage1" in cfg and "checkpoint" in cfg["stage1"]:
+        stage1_ckpt = Path(cfg["stage1"]["checkpoint"])
+    elif "methods" in cfg and "stage1" in cfg["methods"] and "checkpoint" in cfg["methods"]["stage1"]:
+        stage1_ckpt = Path(cfg["methods"]["stage1"]["checkpoint"])
+    else:
+        raise ValueError("Must provide --stage1_checkpoint or stage1.checkpoint in config.")
+        
+    stage1_ckpt = stage1_ckpt.expanduser().resolve()
+    print(f"[Stage2Train] loading stage1 from {stage1_ckpt}")
+    stage1 = _build_stage1_from_ckpt(stage1_ckpt, device=device, methods_cfg=cfg.get("methods", None))
 
     model_cfg = cfg["model"]
     from custom.stage2.models.dcsa import DCSAConfig

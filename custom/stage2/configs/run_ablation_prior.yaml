@@ -1,0 +1,88 @@
+# Ablation Experiment: Validating the Effectiveness of the VQ-VAE Codebook Prior
+# Four stages: Absolute Baseline -> Continuous Prior -> Standard Discrete Prior -> Semantic Discrete Prior
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/ablations/batch_ablation_prior"
+csv_output: "custom/ablations/batch_ablation_prior/summary.csv"
+
+tmux:
+  session_name: "batch_ablation_prior"
+  attach: false
+  fail_if_exists: false
+
+gpus: [4, 5, 6, 7]
+
+experiments:
+  # 1. Absolute Baseline (Pure Continuous)
+  # - No VQ, No Codebook. Only joint_25 + DSTFormer.
+  - name: "exp_1_pure_continuous"
+    experiment:
+      seed: 101
+    methods:
+      stage1:
+        encoder_decoder_only: true  # skip VQ
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "none"  # Returns only z_cont
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # 2. Continuous Prior
+  # - Uses symmetric_dcsa fusion, but Stage 1 VQ is bypassed (encoder_decoder_only: true).
+  # - Tests if the performance comes from the Stage1 Encoder or the actual Discrete Codebook.
+  - name: "exp_2_continuous_prior"
+    experiment:
+      seed: 102
+    methods:
+      stage1:
+        encoder_decoder_only: true  # skip VQ, pass continuous z_e to fusion
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # 3. Standard Discrete Prior
+  # - Restores the standard VQ codebook (H8 baseline).
+  # - Symmetric DCSA fusion with standard discrete tokens.
+  - name: "exp_3_standard_discrete_prior"
+    experiment:
+      seed: 103
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/batch_codebook/clip_5_code_256/best.pt"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # 4. Semantic Discrete Prior (Upper Bound)
+  # - Uses the new Semantic Codebook trained with Auxiliary Cross-Entropy (H9 baseline).
+  - name: "exp_4_semantic_discrete_prior"
+    experiment:
+      seed: 104
+    methods:
+      stage1:
+        checkpoint: "custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16

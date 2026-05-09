@@ -1,6 +1,6 @@
 experiment:
-  name: exp_h9_baseline_8exp
-  seed: 42
+  name: exp_3_standard_discrete_prior
+  seed: 103
 runtime:
   device: cuda
   num_workers: 8
@@ -39,7 +39,7 @@ data:
 stage1:
   checkpoint: custom/checkpoints/batch_codebook/clip_5_code_256/best.pt
 checkpoints:
-  dir: custom/stage2/checkpoints/batch_stage2_h9/exp_h9_baseline_8exp
+  dir: custom/ablations/batch_ablation_prior/exp_3_standard_discrete_prior
 model:
   use_cond: false
   token_count: 1
@@ -73,7 +73,7 @@ model:
   dst_v5_guided_moe:
     num_experts: 8
     guide_mode: none
-name: exp_h9_baseline_8exp
+name: exp_3_standard_discrete_prior
 methods:
   stage1:
-    checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head/best.pt
+    checkpoint: custom/checkpoints/batch_codebook/clip_5_code_256/best.pt

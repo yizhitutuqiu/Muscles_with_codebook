@@ -102,7 +102,9 @@ def _ensure_vibe_data(smpl_src_dir: Path, vibe_dst_dir: Path) -> None:
 def _scan_samples(dataset_root: Path, phase: str) -> list[SampleRef]:
     phase_dir = dataset_root / phase
     if not phase_dir.exists():
-        raise FileNotFoundError(f"Dataset phase dir not found: {phase_dir}")
+        raise FileNotFoundError(
+            f"Dataset phase dir not found: {phase_dir}. Available phases: {sorted([p.name for p in dataset_root.iterdir() if p.is_dir()])}"
+        )
 
     samples: list[SampleRef] = []
     for subject_dir in sorted(phase_dir.iterdir()):
@@ -306,10 +308,9 @@ def _infer_emg(
     return pred
 
 
-def _normalize_emg(emg_8_t: np.ndarray, subject: str) -> np.ndarray:
+def _normalize_emg_for_mesh(emg_8_t: np.ndarray, subject: str) -> np.ndarray:
     themin, themax = _subject_to_emg_minmax(subject)
     emg_norm = (emg_8_t - themin.reshape(8, 1)) / themax.reshape(8, 1)
-    emg_norm = np.clip(emg_norm, 0.0, 1.0)
     return emg_norm.astype(np.float32)
 
 
@@ -318,12 +319,15 @@ def _render_sequence(
     background_bgr: np.ndarray,
     verts_t_v_3: np.ndarray,
     origcam_t_4: np.ndarray,
-    gt_emg_norm_8_t: np.ndarray,
-    pred_emg_norm_8_t: np.ndarray,
+    gt_emg_mesh_8_t: np.ndarray,
+    pred_emg_mesh_8_t: np.ndarray,
+    gt_emg_plot_8_t: np.ndarray,
+    pred_emg_plot_8_t: np.ndarray,
     out_mp4: Path,
     fps: int,
     plot_width: int,
     plot_height: int,
+    plot_vmax: float,
     mesh_views: str,
 ) -> None:
     cell_frames = _render_sequence_cells(
@@ -331,11 +335,14 @@ def _render_sequence(
         background_bgr=background_bgr,
         verts_t_v_3=verts_t_v_3,
         origcam_t_4=origcam_t_4,
-        gt_emg_norm_8_t=gt_emg_norm_8_t,
-        pred_emg_norm_8_t=pred_emg_norm_8_t,
+        gt_emg_mesh_8_t=gt_emg_mesh_8_t,
+        pred_emg_mesh_8_t=pred_emg_mesh_8_t,
+        gt_emg_plot_8_t=gt_emg_plot_8_t,
+        pred_emg_plot_8_t=pred_emg_plot_8_t,
         fps=fps,
         plot_width=plot_width,
         plot_height=plot_height,
+        plot_vmax=plot_vmax,
         mesh_views=mesh_views,
     )
     _write_video_mp4(cell_frames, out_mp4, fps=fps)
@@ -346,16 +353,20 @@ def _render_sequence_cells(
     background_bgr: np.ndarray,
     verts_t_v_3: np.ndarray,
     origcam_t_4: np.ndarray,
-    gt_emg_norm_8_t: np.ndarray,
-    pred_emg_norm_8_t: np.ndarray,
+    gt_emg_mesh_8_t: np.ndarray,
+    pred_emg_mesh_8_t: np.ndarray,
+    gt_emg_plot_8_t: np.ndarray,
+    pred_emg_plot_8_t: np.ndarray,
     fps: int,
     plot_width: int,
     plot_height: int,
+    plot_vmax: float,
     mesh_views: str,
+    debug_overlay_text: bool = False,
 ) -> list[np.ndarray]:
-    t = gt_emg_norm_8_t.shape[1]
-    panel_gt = _render_emg_panel(gt_emg_norm_8_t, plot_width, plot_height, "GT EMG", vmax=1.0)
-    panel_pred = _render_emg_panel(pred_emg_norm_8_t, plot_width, plot_height, "Pred EMG", vmax=1.0)
+    t = gt_emg_mesh_8_t.shape[1]
+    panel_gt = _render_emg_panel(gt_emg_plot_8_t, plot_width, plot_height, "GT EMG", vmax=plot_vmax)
+    panel_pred = _render_emg_panel(pred_emg_plot_8_t, plot_width, plot_height, "Pred EMG", vmax=plot_vmax)
     panel_gt = cv2.cvtColor(panel_gt, cv2.COLOR_RGB2BGR)
     panel_pred = cv2.cvtColor(panel_pred, cv2.COLOR_RGB2BGR)
 
@@ -364,13 +375,22 @@ def _render_sequence_cells(
         verts = verts_t_v_3[i]
         cam = origcam_t_4[i]
 
+        if debug_overlay_text:
+            gt_v = gt_emg_mesh_8_t[:, i].astype(np.float32)
+            pred_v = pred_emg_mesh_8_t[:, i].astype(np.float32)
+            gt_txt = f"GT mesh max={gt_v.max():.3f} mean={gt_v.mean():.3f} sat={(gt_v>=0.5).sum()}/8"
+            pred_txt = f"Pred mesh max={pred_v.max():.3f} mean={pred_v.mean():.3f} sat={(pred_v>=0.5).sum()}/8"
+        else:
+            gt_txt = None
+            pred_txt = None
+
         if mesh_views == "front":
             gt_mesh, _ = renderer.render(
                 flag="False",
                 current_path="/tmp/mia_vis_gt",
                 img=background_bgr,
                 verts=verts,
-                emg_values=gt_emg_norm_8_t[:, i],
+                emg_values=gt_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=True,
                 pred=False,
@@ -380,7 +400,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_pred",
                 img=background_bgr,
                 verts=verts,
-                emg_values=pred_emg_norm_8_t[:, i],
+                emg_values=pred_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=True,
                 pred=True,
@@ -391,7 +411,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_gt",
                 img=background_bgr,
                 verts=verts,
-                emg_values=gt_emg_norm_8_t[:, i],
+                emg_values=gt_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=False,
                 pred=False,
@@ -401,7 +421,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_pred",
                 img=background_bgr,
                 verts=verts,
-                emg_values=pred_emg_norm_8_t[:, i],
+                emg_values=pred_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=False,
                 pred=True,
@@ -412,7 +432,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_gt",
                 img=background_bgr,
                 verts=verts,
-                emg_values=gt_emg_norm_8_t[:, i],
+                emg_values=gt_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=True,
                 pred=False,
@@ -422,7 +442,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_gt",
                 img=background_bgr,
                 verts=verts,
-                emg_values=gt_emg_norm_8_t[:, i],
+                emg_values=gt_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=False,
                 pred=False,
@@ -432,7 +452,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_pred",
                 img=background_bgr,
                 verts=verts,
-                emg_values=pred_emg_norm_8_t[:, i],
+                emg_values=pred_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=True,
                 pred=True,
@@ -442,7 +462,7 @@ def _render_sequence_cells(
                 current_path="/tmp/mia_vis_pred",
                 img=background_bgr,
                 verts=verts,
-                emg_values=pred_emg_norm_8_t[:, i],
+                emg_values=pred_emg_mesh_8_t[:, i],
                 cam=cam,
                 front=False,
                 pred=True,
@@ -451,6 +471,12 @@ def _render_sequence_cells(
             pred_mesh = np.concatenate([pred_front, pred_back], axis=1)
         else:
             raise ValueError(f"Invalid mesh_views: {mesh_views}")
+
+        if debug_overlay_text:
+            if gt_txt is not None:
+                cv2.putText(gt_mesh, gt_txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            if pred_txt is not None:
+                cv2.putText(pred_mesh, pred_txt, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
 
         gt_row = np.concatenate([gt_mesh, panel_gt], axis=1)
         pred_row = np.concatenate([pred_mesh, panel_pred], axis=1)
@@ -481,6 +507,37 @@ def _pad_emg_8_t(emg_8_t: np.ndarray, target_len: int) -> np.ndarray:
     return np.concatenate([emg_8_t, pad], axis=1)
 
 
+def _compute_color_stats(emg_mesh_8_t: np.ndarray, vmax: float = 0.5) -> dict[str, Any]:
+    t = int(emg_mesh_8_t.shape[1])
+    per_frame: list[dict[str, Any]] = []
+    for i in range(t):
+        v = emg_mesh_8_t[:, i].astype(np.float64)
+        per_frame.append(
+            {
+                "frame": i,
+                "min": float(v.min()),
+                "max": float(v.max()),
+                "mean": float(v.mean()),
+                "frac_lt0": float(np.mean(v < 0.0)),
+                "frac_mid": float(np.mean((v >= 0.0) & (v < vmax))),
+                "frac_sat": float(np.mean(v >= vmax)),
+            }
+        )
+
+    v_all = emg_mesh_8_t.astype(np.float64).reshape(-1)
+    summary = {
+        "vmax": float(vmax),
+        "min": float(v_all.min()),
+        "max": float(v_all.max()),
+        "mean": float(v_all.mean()),
+        "frac_lt0": float(np.mean(v_all < 0.0)),
+        "frac_mid": float(np.mean((v_all >= 0.0) & (v_all < vmax))),
+        "frac_sat": float(np.mean(v_all >= vmax)),
+    }
+
+    return {"summary": summary, "per_frame": per_frame}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -488,7 +545,7 @@ def main() -> None:
         type=str,
         default="/data/litengmo/HSMR/mia_custom/MIADatasetOfficial",
     )
-    parser.add_argument("--phase", type=str, default="val")
+    parser.add_argument("--phase", type=str, default="val", choices=["train", "val", "test"])
     parser.add_argument("--n_per_exercise", type=int, default=3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max_exercises", type=int, default=-1)
@@ -518,7 +575,10 @@ def main() -> None:
     parser.add_argument("--render_height", type=int, default=640)
     parser.add_argument("--plot_width", type=int, default=420)
     parser.add_argument("--plot_height", type=int, default=640)
+    parser.add_argument("--plot_emg_vmax", type=float, default=300.0)
     parser.add_argument("--mesh_views", type=str, default="both", choices=["front", "back", "both"])
+    parser.add_argument("--debug_color_stats", action="store_true")
+    parser.add_argument("--debug_overlay_text", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
 
@@ -533,6 +593,10 @@ def main() -> None:
     smpl_src_dir = Path(args.smpl_src)
     vibe_dst_dir = Path(args.vibe_dst)
 
+    if args.phase == "test" and not (dataset_root / "test").exists():
+        raise SystemExit(
+            f"Requested --phase test but {dataset_root}/test does not exist. This dataset layout provides train/val only; use --phase val (or train)."
+        )
     samples = _scan_samples(dataset_root, args.phase)
     samples_by_exercise: dict[str, list[SampleRef]] = {}
     for s in samples:
@@ -613,17 +677,19 @@ def main() -> None:
             condval = _subject_to_condval(sample.subject)
             pred_emg_8_t = _infer_emg(model, arrays["joints3d_t_25_3"], condval=condval, device=device)
             gt_emg_8_t = arrays["emg_8_t"]
-            gt_emg_norm = _normalize_emg(gt_emg_8_t, sample.subject)
-            pred_emg_norm = _normalize_emg(pred_emg_8_t, sample.subject)
-            t = gt_emg_norm.shape[1]
+            gt_emg_mesh = _normalize_emg_for_mesh(gt_emg_8_t, sample.subject)
+            pred_emg_mesh = _normalize_emg_for_mesh(pred_emg_8_t, sample.subject)
+            t = gt_emg_mesh.shape[1]
             max_t = max(max_t, t)
             prepared.append(
                 {
                     "sample": sample,
                     "verts": arrays["verts_t_v_3"],
                     "cam": arrays["origcam_t_4"],
-                    "gt_emg": gt_emg_norm,
-                    "pred_emg": pred_emg_norm,
+                    "gt_emg_plot": gt_emg_8_t.astype(np.float32),
+                    "pred_emg_plot": pred_emg_8_t.astype(np.float32),
+                    "gt_emg_mesh": gt_emg_mesh,
+                    "pred_emg_mesh": pred_emg_mesh,
                 }
             )
 
@@ -633,22 +699,39 @@ def main() -> None:
         for item in prepared:
             item["verts"] = _pad_time_first(item["verts"], max_t)
             item["cam"] = _pad_time_first(item["cam"], max_t)
-            item["gt_emg"] = _pad_emg_8_t(item["gt_emg"], max_t)
-            item["pred_emg"] = _pad_emg_8_t(item["pred_emg"], max_t)
+            item["gt_emg_plot"] = _pad_emg_8_t(item["gt_emg_plot"], max_t)
+            item["pred_emg_plot"] = _pad_emg_8_t(item["pred_emg_plot"], max_t)
+            item["gt_emg_mesh"] = _pad_emg_8_t(item["gt_emg_mesh"], max_t)
+            item["pred_emg_mesh"] = _pad_emg_8_t(item["pred_emg_mesh"], max_t)
 
         cell_streams: list[list[np.ndarray]] = []
         for item in prepared:
+            if args.debug_color_stats:
+                sample = item["sample"]
+                stats = {
+                    "sample": sample.key,
+                    "gt": _compute_color_stats(item["gt_emg_mesh"], vmax=0.5),
+                    "pred": _compute_color_stats(item["pred_emg_mesh"], vmax=0.5),
+                }
+                out_stats = out_dir / exercise / sample.subject / f"{sample.sample_id}_color_stats.json"
+                out_stats.parent.mkdir(parents=True, exist_ok=True)
+                out_stats.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
+
             cell_frames = _render_sequence_cells(
                 renderer=renderer,
                 background_bgr=background,
                 verts_t_v_3=item["verts"],
                 origcam_t_4=item["cam"],
-                gt_emg_norm_8_t=item["gt_emg"],
-                pred_emg_norm_8_t=item["pred_emg"],
+                gt_emg_mesh_8_t=item["gt_emg_mesh"],
+                pred_emg_mesh_8_t=item["pred_emg_mesh"],
+                gt_emg_plot_8_t=item["gt_emg_plot"],
+                pred_emg_plot_8_t=item["pred_emg_plot"],
                 fps=int(args.fps),
                 plot_width=int(args.plot_width),
                 plot_height=int(args.plot_height),
+                plot_vmax=float(args.plot_emg_vmax),
                 mesh_views=args.mesh_views,
+                debug_overlay_text=bool(args.debug_overlay_text),
             )
             cell_streams.append(cell_frames)
 

@@ -91,4 +91,10 @@ def build_fusion(
     if fusion_type in ("residual_add", "residual", "add"):
         cfg = residual_add_cfg or ResidualAddConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("detail_layers", "detail_hidden_ratio", "scale", "dropout")})
         return ResidualAddFusion(cfg)
-    raise ValueError(f"Unknown fusion_type={fusion_type!r}. Use 'dcsa' or 'residual_add'.")
+    if fusion_type in ("none", "continuous_only"):
+        # 对于不使用 codebook 先验的纯连续网络，直接返回连续特征
+        class ContinuousOnlyFusion(nn.Module):
+            def forward(self, cont: torch.Tensor, disc: torch.Tensor) -> torch.Tensor:
+                return cont
+        return ContinuousOnlyFusion()
+    raise ValueError(f"Unknown fusion_type={fusion_type!r}. Use 'dcsa' or 'residual_add' or 'none'.")

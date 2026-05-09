@@ -127,6 +127,8 @@ class Stage2Pose2EMG(nn.Module):
             fused_token_count = self._cont_token_count
         elif fusion_type_str in ("dcsa_symmetric", "dcsa_sym", "symmetric_dcsa"):
             fused_token_count = self._cont_token_count + int(cfg.token_count)
+        elif fusion_type_str in ("none", "continuous_only"):
+            fused_token_count = self._cont_token_count
         else:
             fused_token_count = int(cfg.token_count)
 
