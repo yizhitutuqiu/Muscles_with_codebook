@@ -849,7 +849,7 @@ def main() -> None:
 
     official_cond_model = None
     official_cond_ckpt = None
-    if official_cond_enabled and task != "emg2pose":
+    if official_cond_enabled:
         m = methods_cfg.get("official_cond", {}) or {}
         ckpt = Path(str(m.get("checkpoint", "pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"))).expanduser()
         official_cond_ckpt = ckpt if ckpt.is_absolute() else (mia_root / ckpt).resolve()

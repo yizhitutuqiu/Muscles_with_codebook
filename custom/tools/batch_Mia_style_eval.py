@@ -63,22 +63,38 @@ def main():
         ckpt_path = exp_dir / "best.pt"
         
         # Load the training config to get stage1 path if possible and determine task
-        train_cfg_path = exp_dir / "config.yaml"
+        ckpt_path = exp_dir / "best.pt"
         stage1_ckpt = ""
         task = "pose2emg"
+        
+        try:
+            import torch
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            if "config" in ckpt:
+                t_cfg = ckpt["config"]
+                if "stage1" in t_cfg:
+                    stage1_ckpt = t_cfg["stage1"].get("checkpoint", "")
+                if "model" in t_cfg:
+                    task = str(t_cfg["model"].get("task", "pose2emg")).strip().lower()
+            elif "stage1_checkpoint" in ckpt:
+                stage1_ckpt = ckpt["stage1_checkpoint"]
+        except Exception as e:
+            print(f"Warning: Could not parse task from checkpoint: {e}")
+            
+        train_cfg_path = exp_dir / "config.yaml"
         if train_cfg_path.exists():
             with open(train_cfg_path, "r") as f:
                 t_cfg = yaml.safe_load(f)
-                if t_cfg and "stage1" in t_cfg:
+                if t_cfg and "stage1" in t_cfg and not stage1_ckpt:
                     stage1_ckpt = t_cfg["stage1"].get("checkpoint", "")
-                if t_cfg and "model" in t_cfg:
+                if t_cfg and "model" in t_cfg and task == "pose2emg":
                     task = str(t_cfg["model"].get("task", "pose2emg")).strip().lower()
 
         eval_cfg = copy.deepcopy(base_eval_cfg)
         eval_cfg["output"] = {"out_dir": str(exp_dir / "eval_results")}
         
         if task == "emg2pose":
-            # For emg2pose, disable official models as they are broken in the official repo
+            # For emg2pose, use the newly reproduced official checkpoint
             eval_cfg["methods"] = {
                 "stage2": {
                     "enabled": True,
@@ -86,8 +102,8 @@ def main():
                     "stage1_checkpoint": stage1_ckpt
                 },
                 "official_cond": {
-                    "enabled": False,
-                    "checkpoint": ""
+                    "enabled": True,
+                    "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260510_000126/checkpoints/official_reproduction_cond_emgtopose_threed/model_100.pth"
                 },
                 "official_nocond": {
                     "enabled": False,
