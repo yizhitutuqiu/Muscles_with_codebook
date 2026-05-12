@@ -1,0 +1,80 @@
+# Lightweight ablations on top of exp_h8_baseline_8exp (pose2emg).
+# Constraint: keep num_experts=8 and keep Stage1 codebook checkpoint unchanged.
+
+base_config: "custom/stage2/configs/stage2_clip5_h2_nocond.yaml"
+checkpoint_dir: "custom/stage2/checkpoints/batch_stage2_h8_lightweight_0511"
+csv_output: "custom/stage2/checkpoints/batch_stage2_h8_lightweight_0511/summary.csv"
+
+tmux:
+  session_name: "batch_stage2_h8_light_0511"
+  attach: false
+  fail_if_exists: false
+
+gpus: [3, 4, 5, 6, 7]
+
+experiments:
+  # GPU3: Baseline (as requested)
+  - name: "exp_h8_baseline_8exp"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+
+  # GPU4: Ablation-1 (reduce temporal depth)
+  - name: "exp_h8_light_ablate_num_layers_3"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+        num_layers: 3
+    data:
+      batch_size: 16
+
+  # GPU5: Ablation-2 (reduce MoE FFN width)
+  - name: "exp_h8_light_ablate_mlp_ratio_2"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+        mlp_ratio: 2.0
+    data:
+      batch_size: 16
+
+  # GPU6: Ablation-3 (reduce temporal attention heads)
+  - name: "exp_h8_light_ablate_temporal_heads_4"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+        num_heads: 4
+    data:
+      batch_size: 16
+
+  # GPU7: Ablation-4 (reduce fusion attention heads; keep temporal untouched)
+  - name: "exp_h8_light_ablate_fusion_heads_4"
+    model:
+      cont_encoder_type: "joint_25"
+      fusion_type: "symmetric_dcsa"
+      dcsa:
+        num_heads: 4
+      temporal_type: "dstformer_v5_guided_moe"
+      dst_v5_guided_moe:
+        num_experts: 8
+        guide_mode: "none"
+    data:
+      batch_size: 16
+

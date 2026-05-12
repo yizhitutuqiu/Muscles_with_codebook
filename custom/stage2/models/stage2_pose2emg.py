@@ -234,6 +234,8 @@ class Stage2Pose2EMG(nn.Module):
         stage1_code_dim = int(mod.cfg.code_dim)
         if stage1_code_dim != int(self.cfg.dim):
             raise ValueError(f"Stage1 code_dim={stage1_code_dim} != Stage2 dim={int(self.cfg.dim)}")
+        
+        bypass_vq = bool(getattr(getattr(self.stage1, "cfg", None), "encoder_decoder_only", False))
 
         # Case A: unified clip-level codebook
         if stage1_token_count == 1 and stage1_in_dim % expected_frame_dim == 0 and stage1_in_dim != expected_frame_dim:
@@ -246,11 +248,19 @@ class Stage2Pose2EMG(nn.Module):
             x_clips = inputs.reshape(b, num_clips, clip_len, expected_frame_dim).reshape(b * num_clips, stage1_in_dim)
             x_n = mod.normalize(x_clips.float(), update=False)
             z_e = mod.encoder(x_n).view(b * num_clips, 1, stage1_code_dim)
-            z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * num_clips, stage1_code_dim))
-            z_q_base = z_q.view(b * num_clips, stage1_token_count * stage1_code_dim)
-            z_q = z_q.view(b, num_clips, 1, stage1_code_dim).repeat_interleave(int(clip_len), dim=1)
-            idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
-            return z_q, idx_bt, z_q_base
+            if bypass_vq:
+                dev = z_e.device
+                idx = torch.zeros((b * num_clips,), dtype=torch.long, device=dev)
+                z_q_base = z_e.view(b * num_clips, stage1_code_dim)
+                z_q = z_e.view(b, num_clips, 1, stage1_code_dim).repeat_interleave(int(clip_len), dim=1)
+                idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
+                return z_q, idx_bt, z_q_base
+            else:
+                z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * num_clips, stage1_code_dim))
+                z_q_base = z_q.view(b * num_clips, stage1_token_count * stage1_code_dim)
+                z_q = z_q.view(b, num_clips, 1, stage1_code_dim).repeat_interleave(int(clip_len), dim=1)
+                idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
+                return z_q, idx_bt, z_q_base
 
         if stage1_in_dim == expected_frame_dim:
             if stage1_token_count != int(self.cfg.token_count):
@@ -259,10 +269,16 @@ class Stage2Pose2EMG(nn.Module):
                 )
             x_n = mod.normalize(x_flat.float(), update=False)
             z_e = mod.encoder(x_n).view(b * t, stage1_token_count, stage1_code_dim)
-            z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * t * stage1_token_count, stage1_code_dim))
-            z_q = z_q.view(b, t, stage1_token_count, stage1_code_dim)
-            idx_bt = idx.view(b, t, stage1_token_count)
-            return z_q, idx_bt, None
+            if bypass_vq:
+                dev = z_e.device
+                z_q = z_e.view(b, t, stage1_token_count, stage1_code_dim)
+                idx_bt = torch.zeros((b, t, stage1_token_count), dtype=torch.long, device=dev)
+                return z_q, idx_bt, None
+            else:
+                z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * t * stage1_token_count, stage1_code_dim))
+                z_q = z_q.view(b, t, stage1_token_count, stage1_code_dim)
+                idx_bt = idx.view(b, t, stage1_token_count)
+                return z_q, idx_bt, None
 
         expected_clip_dim = int(t) * expected_frame_dim
         if stage1_in_dim != expected_clip_dim:
@@ -274,9 +290,14 @@ class Stage2Pose2EMG(nn.Module):
         x_clip = inputs.reshape(b, expected_clip_dim)
         x_n = mod.normalize(x_clip.float(), update=False)
         z_e = mod.encoder(x_n).view(b, stage1_token_count, stage1_code_dim)
-        z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
-        z_q = z_q.view(b, stage1_token_count, stage1_code_dim)
-        idx = idx.view(b, stage1_token_count)
+        if bypass_vq:
+            dev = z_e.device
+            z_q = z_e
+            idx = torch.zeros((b, stage1_token_count), dtype=torch.long, device=dev)
+        else:
+            z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
+            z_q = z_q.view(b, stage1_token_count, stage1_code_dim)
+            idx = idx.view(b, stage1_token_count)
         
         if stage1_token_count % int(t) != 0 and stage1_token_count != 1:
             tokens_per_frame = stage1_token_count

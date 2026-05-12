@@ -18,6 +18,18 @@ def main():
         default="cuda:0",
         help="Device to run evaluation on",
     )
+    parser.add_argument(
+        "--eval_batch_size",
+        type=int,
+        default=int(os.environ.get("MIA_EVAL_BATCH_SIZE", "16")),
+        help="Evaluation batch size",
+    )
+    parser.add_argument(
+        "--eval_num_workers",
+        type=int,
+        default=int(os.environ.get("MIA_EVAL_NUM_WORKERS", "8")),
+        help="Evaluation dataloader num_workers",
+    )
     args = parser.parse_args()
 
     batch_dir = Path(args.batch_dir).resolve()
@@ -37,7 +49,7 @@ def main():
 
     # Base eval template config
     base_eval_cfg = {
-        "runtime": {"device": args.device, "num_workers": 4, "batch_size": 8},
+        "runtime": {"device": args.device, "num_workers": int(args.eval_num_workers), "batch_size": int(args.eval_batch_size)},
         "data": {"step": 30, "std": False, "percent": 1.0, "joints3d_root_center": True},
         "protocols": [
             {

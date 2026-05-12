@@ -19,6 +19,7 @@ def _run_post_training_eval(out_dir: str, device: str) -> None:
     """Run Mia_style_eval.py automatically on the newly trained model"""
     import subprocess
     from pathlib import Path
+    import os
     import yaml
     
     out_path = Path(out_dir)
@@ -31,7 +32,11 @@ def _run_post_training_eval(out_dir: str, device: str) -> None:
     
     # Base eval template config
     base_eval_cfg = {
-        "runtime": {"device": device, "num_workers": 4, "batch_size": 8},
+        "runtime": {
+            "device": device,
+            "num_workers": int(os.environ.get("MIA_EVAL_NUM_WORKERS", "8")),
+            "batch_size": int(os.environ.get("MIA_EVAL_BATCH_SIZE", "16")),
+        },
         "data": {"step": 30, "std": False, "percent": 1.0, "joints3d_root_center": True},
         "protocols": [
             {

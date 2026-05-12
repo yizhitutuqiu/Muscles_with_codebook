@@ -797,7 +797,11 @@ def main() -> None:
     methods_cfg = cfg.get("methods", {}) or {}
     out_cfg = cfg.get("output", {}) or {}
 
-    device = torch.device("cuda" if (str(runtime.get("device", "cuda")) == "cuda" and torch.cuda.is_available()) else "cpu")
+    runtime_device = str(runtime.get("device", "cuda")).strip().lower()
+    if runtime_device.startswith("cuda"):
+        device = torch.device(runtime_device if torch.cuda.is_available() else "cpu")
+    else:
+        device = torch.device(runtime_device)
     num_workers = int(runtime.get("num_workers", 4))
     batch_size = int(runtime.get("batch_size", 8))
     step = int(data_cfg.get("step", 30))
