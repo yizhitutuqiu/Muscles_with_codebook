@@ -142,6 +142,52 @@ def _load_sample_arrays(sample: SampleRef) -> dict[str, np.ndarray]:
         "origcam_t_4": origcam.astype(np.float32),
     }
 
+def _load_our_model(checkpoint_path: Path, device: Any) -> tuple[Any, Any]:
+    from custom.tools.Mia_style_eval import _build_stage2_from_ckpt
+    model, cfg, _, stage1 = _build_stage2_from_ckpt(checkpoint_path, device, stage1_override_ckpt=None)
+    return model, stage1
+
+def _infer_our_pose2emg(model, stage1, joints3d_t_25_3, condval, device) -> np.ndarray:
+    import torch
+    joints3d_t_25_3 = joints3d_t_25_3[:, :25, :]
+    root = joints3d_t_25_3[:, 0:1, :]
+    inputs_np = joints3d_t_25_3 - root
+    inputs = torch.from_numpy(inputs_np).unsqueeze(0).to(device)
+    cond = torch.tensor([[condval]], dtype=torch.float32, device=device)
+    with torch.no_grad():
+        out = model(inputs, cond=cond)
+        pred = out["pred"]
+        stage1_emg = getattr(stage1, "emg", None)
+        emg_standardizer = getattr(stage1_emg, "standardizer", None) if stage1_emg else None
+        if emg_standardizer is not None:
+            from custom.tools.Mia_style_eval import _emg_standardizer_stats_bt8
+            mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(pred.shape[1]), device=device)
+            pred = pred * std_bt8 + mean_bt8
+    return pred.squeeze(0).detach().cpu().numpy().astype(np.float32).T
+
+def _infer_our_emg2pose(model, stage1, emg_8_t, condval, device, joints3d_t_25_3) -> np.ndarray:
+    import torch
+    inputs_np = emg_8_t.T
+    inputs = torch.from_numpy(inputs_np).unsqueeze(0).to(device) # B, T, 8
+    
+    # STANDARDIZE EMG
+    stage1_emg = getattr(stage1, "emg", None)
+    emg_standardizer = getattr(stage1_emg, "standardizer", None) if stage1_emg else None
+    if emg_standardizer is not None:
+        from custom.tools.Mia_style_eval import _emg_standardizer_stats_bt8
+        mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(inputs.shape[1]), device=device)
+        inputs = (inputs - mean_bt8) / std_bt8
+        
+    cond = torch.tensor([[condval]], dtype=torch.float32, device=device)
+    with torch.no_grad():
+        out = model(inputs, cond=cond)
+        pred = out["pred"]
+    pred_np = pred.squeeze(0).detach().cpu().numpy().astype(np.float32)
+    # Restore absolute coordinates using GT's Joint 8 (which is the root in Mia_style_eval)
+    joints3d_t_25_3 = joints3d_t_25_3[:, :25, :]
+    root_8 = joints3d_t_25_3[:, 8:9, :]
+    return pred_np + root_8
+
 def _load_model(checkpoint_path: Path, device: Any, task: str) -> Any:
     import torch
     if task == "pose2emg":
@@ -254,7 +300,7 @@ def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, t
     plt.close(fig)
     return img
 
-def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None) -> np.ndarray:
+def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3: np.ndarray, our_joints_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None) -> np.ndarray:
     fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
     ax = fig.add_subplot(1, 1, 1, projection='3d')
     ax.set_title(title)
@@ -270,7 +316,7 @@ def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3:
                   [gt_joints_25_3[vertices[0], 1], gt_joints_25_3[vertices[1], 1]],
                   linewidth=2, color='green', alpha=0.7)
                   
-    # Pred (Red)
+    # Official Pred (Red)
     for j in range(25):
         ax.scatter3D(pred_joints_25_3[j, 0], pred_joints_25_3[j, 2], pred_joints_25_3[j, 1], c='red', s=15)
     for vertices, _ in limb_seq:
@@ -278,6 +324,15 @@ def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3:
                   [pred_joints_25_3[vertices[0], 2], pred_joints_25_3[vertices[1], 2]],
                   [pred_joints_25_3[vertices[0], 1], pred_joints_25_3[vertices[1], 1]],
                   linewidth=2, color='red', alpha=0.7)
+                  
+    # Our Pred (Blue)
+    for j in range(25):
+        ax.scatter3D(our_joints_25_3[j, 0], our_joints_25_3[j, 2], our_joints_25_3[j, 1], c='blue', s=15)
+    for vertices, _ in limb_seq:
+        ax.plot3D([our_joints_25_3[vertices[0], 0], our_joints_25_3[vertices[1], 0]],
+                  [our_joints_25_3[vertices[0], 2], our_joints_25_3[vertices[1], 2]],
+                  [our_joints_25_3[vertices[0], 1], our_joints_25_3[vertices[1], 1]],
+                  linewidth=2, color='blue', alpha=0.7)
 
     if bounds:
         ax.set_xlim3d([bounds['x_min'], bounds['x_max']])
@@ -288,10 +343,10 @@ def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3:
         except AttributeError:
             pass
     else:
-        minvaly = min(np.min(gt_joints_25_3[:, 2]), np.min(pred_joints_25_3[:, 2]))
-        maxvaly = max(np.max(gt_joints_25_3[:, 2]), np.max(pred_joints_25_3[:, 2]))
-        minvalz = min(np.min(gt_joints_25_3[:, 1]), np.min(pred_joints_25_3[:, 1]))
-        maxvalz = max(np.max(gt_joints_25_3[:, 1]), np.max(pred_joints_25_3[:, 1]))
+        minvaly = min(np.min(gt_joints_25_3[:, 2]), np.min(pred_joints_25_3[:, 2]), np.min(our_joints_25_3[:, 2]))
+        maxvaly = max(np.max(gt_joints_25_3[:, 2]), np.max(pred_joints_25_3[:, 2]), np.max(our_joints_25_3[:, 2]))
+        minvalz = min(np.min(gt_joints_25_3[:, 1]), np.min(pred_joints_25_3[:, 1]), np.min(our_joints_25_3[:, 1]))
+        maxvalz = max(np.max(gt_joints_25_3[:, 1]), np.max(pred_joints_25_3[:, 1]), np.max(our_joints_25_3[:, 1]))
         ax.set_xlim3d([-1.0, 2.0])
         ax.set_zlim3d([minvalz, maxvalz])
         ax.set_ylim3d([minvaly, maxvaly])
@@ -374,7 +429,8 @@ def _compute_color_stats(emg_mesh_8_t: np.ndarray, vmax: float = 0.5) -> dict[st
 
 def _render_sequence_cells_pose2emg(
     renderer: Any, background_bgr: np.ndarray, verts_t_v_3: np.ndarray, origcam_t_4: np.ndarray,
-    gt_emg_mesh_8_t: np.ndarray, pred_emg_mesh_8_t: np.ndarray, gt_emg_plot_8_t: np.ndarray, pred_emg_plot_8_t: np.ndarray,
+    gt_emg_mesh_8_t: np.ndarray, pred_emg_mesh_8_t: np.ndarray, our_emg_mesh_8_t: np.ndarray,
+    gt_emg_plot_8_t: np.ndarray, pred_emg_plot_8_t: np.ndarray, our_emg_plot_8_t: np.ndarray,
     fps: int, plot_width: int, plot_height: int, plot_vmax: float, mesh_views: str, debug_overlay_text: bool
 ) -> list[np.ndarray]:
     t = gt_emg_mesh_8_t.shape[1]
@@ -399,22 +455,29 @@ def _render_sequence_cells_pose2emg(
     return frames
 
 def _render_sequence_cells_emg2pose(
-    gt_joints_t_25_3: np.ndarray, pred_joints_t_25_3: np.ndarray, emg_plot_8_t: np.ndarray,
-    fps: int, plot_width: int, plot_height: int, render_width: int, render_height: int, plot_vmax: float, debug_overlay_text: bool
+    gt_joints_t_25_3: np.ndarray, pred_joints_t_25_3: np.ndarray, our_joints_t_25_3: np.ndarray, emg_plot_8_t: np.ndarray,
+    fps: int, plot_width: int, plot_height: int, render_width: int, render_height: int, plot_vmax: float, debug_overlay_text: bool,
+    align_root_to_gt: bool = False
 ) -> list[np.ndarray]:
+    if align_root_to_gt:
+        pred_joints_t_25_3 = pred_joints_t_25_3 - pred_joints_t_25_3[:, 0:1, :] + gt_joints_t_25_3[:, 0:1, :]
+        our_joints_t_25_3 = our_joints_t_25_3 - our_joints_t_25_3[:, 0:1, :] + gt_joints_t_25_3[:, 0:1, :]
+
     t = gt_joints_t_25_3.shape[0]
     panel_emg = cv2.cvtColor(_render_emg_panel(emg_plot_8_t, plot_width, plot_height, "Input EMG", vmax=plot_vmax), cv2.COLOR_RGB2BGR)
     frames = []
-    bounds = _compute_3d_bounds(gt_joints_t_25_3, pred_joints_t_25_3)
+    bounds = _compute_3d_bounds(np.concatenate([gt_joints_t_25_3[:, :25], pred_joints_t_25_3[:, :25], our_joints_t_25_3[:, :25]], axis=0), np.zeros_like(gt_joints_t_25_3[:, :25])) # HACK: compute_3d_bounds handles concatenated
     for i in tqdm(range(t), desc="Rendering emg2pose frames", leave=False):
         gt_skel = cv2.cvtColor(_render_skeleton_panel(gt_joints_t_25_3[i, :25], render_width, render_height, "GT 3D Pose", bounds), cv2.COLOR_RGB2BGR)
-        pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Pred 3D Pose", bounds), cv2.COLOR_RGB2BGR)
+        pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred", bounds), cv2.COLOR_RGB2BGR)
+        our_skel = cv2.cvtColor(_render_skeleton_panel(our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred", bounds), cv2.COLOR_RGB2BGR)
+        overlay_skel = cv2.cvtColor(_render_overlay_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], our_joints_t_25_3[i, :25], render_width, render_height, "Overlay (GT:G, Off:R, Ours:B)", bounds), cv2.COLOR_RGB2BGR)
         
-        overlay_skel = cv2.cvtColor(_render_overlay_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], render_width, render_height, "Overlay (GT:Green, Pred:Red)", bounds), cv2.COLOR_RGB2BGR)
         gt_row = np.concatenate([gt_skel, panel_emg], axis=1)
         pred_row = np.concatenate([pred_skel, panel_emg], axis=1)
+        our_row = np.concatenate([our_skel, panel_emg], axis=1)
         overlay_row = np.concatenate([overlay_skel, panel_emg], axis=1)
-        frames.append(np.concatenate([gt_row, pred_row, overlay_row], axis=0))
+        frames.append(np.concatenate([gt_row, pred_row, our_row, overlay_row], axis=0))
     return frames
 
 def main() -> None:
@@ -435,11 +498,16 @@ def main() -> None:
     seed = cfg.get("seed", 0)
     max_exercises = cfg.get("max_exercises", -1)
     filter_worst_n = cfg.get("filter_worst_n", 0)
+    filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
+    filter_our_max_rmse_threshold = cfg.get("filter_our_max_rmse_threshold", 999.0)
+    filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
     
     if task == "pose2emg":
         checkpoint_path = Path(cfg.get("pose2emg", {}).get("checkpoint", ""))
+        our_checkpoint_path = Path(cfg.get("pose2emg", {}).get("our_checkpoint", ""))
     elif task == "emg2pose":
         checkpoint_path = Path(cfg.get("emg2pose", {}).get("checkpoint", ""))
+        our_checkpoint_path = Path(cfg.get("emg2pose", {}).get("our_checkpoint", ""))
     else:
         raise ValueError(f"Unknown task: {task}")
 
@@ -460,6 +528,7 @@ def main() -> None:
     debug_color_stats = cfg.get("debug_color_stats", False)
     debug_overlay_text = cfg.get("debug_overlay_text", False)
     dry_run = cfg.get("dry_run", False)
+    align_root_to_gt = cfg.get("align_root_to_gt", False)
 
     random.seed(seed)
     
@@ -472,10 +541,11 @@ def main() -> None:
 
     selected_by_exercise = {}
     filter_worst_n = cfg.get("filter_worst_n", 0)
+    filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     for ex in exercise_names:
         cand = samples_by_exercise[ex]
-        if filter_worst_n > 0:
-            # Load ALL samples for inference to find the global worst
+        if filter_worst_n > 0 or filter_our_best_diff_n > 0:
+            # Load ALL samples for inference to find the global extreme
             selected_by_exercise[ex] = cand
         else:
             random.shuffle(cand)
@@ -496,6 +566,9 @@ def main() -> None:
         else: background = np.zeros((render_height, render_width, 3), dtype=np.uint8)
     
     model = _load_model(checkpoint_path, device, task)
+    our_model, our_stage1 = None, None
+    if our_checkpoint_path.exists():
+        our_model, our_stage1 = _load_our_model(our_checkpoint_path, device)
 
     total_inference_time = 0.0
     total_visualization_time = 0.0
@@ -537,6 +610,7 @@ def main() -> None:
                     "sample": sample, "verts": arrays["verts_t_v_3"], "cam": arrays["origcam_t_4"],
                     "gt_emg_plot": arrays["emg_8_t"].astype(np.float32), "pred_emg_plot": pred_emg_8_t,
                     "gt_emg_mesh": gt_emg_mesh, "pred_emg_mesh": pred_emg_mesh,
+                    "raw_joints": arrays["joints3d_t_25_3"], "raw_emg": arrays["emg_8_t"]
                 })
             else:
                 if cache_file.exists():
@@ -553,35 +627,109 @@ def main() -> None:
                     
                 prepared.append({
                     "sample": sample, "gt_joints": arrays["joints3d_t_25_3"], "pred_joints": pred_joints,
-                    "emg_plot": arrays["emg_8_t"].astype(np.float32)
+                    "emg_plot": arrays["emg_8_t"].astype(np.float32),
+                    "raw_joints": arrays["joints3d_t_25_3"], "raw_emg": arrays["emg_8_t"]
                 })
 
         if prepared:
             all_prepared[exercise] = (prepared, max_t)
 
+
+    # Run Our Model Inference on the selected items (Phase 1.5)
+    if our_checkpoint_path.exists():
+        if our_model is None:
+            our_model, our_stage1 = _load_our_model(our_checkpoint_path, device)
+        for exercise, (prepared, max_t) in tqdm(all_prepared.items(), desc="Phase 1.5: Our Model Inference & Cache"):
+            for item in prepared:
+                sample = item["sample"]
+                temp_dir = out_dir / "temp" / sample.exercise
+                our_cache_file = temp_dir / f"{sample.sample_id}_our_pred.npy"
+                our_metric_file = temp_dir / f"{sample.sample_id}_our_metric.json"
+                condval = _subject_to_condval(sample.subject)
+                
+                if task == "pose2emg":
+                    if our_cache_file.exists():
+                        our_pred_emg_8_t = np.load(our_cache_file)
+                    else:
+                        our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
+                        np.save(our_cache_file, our_pred_emg_8_t)
+                    
+                    if not our_metric_file.exists():
+                        gt_flat = item["raw_emg"].T
+                        metric = _compute_official_metrics(our_pred_emg_8_t.T, gt_flat, task)
+                        with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                        
+                    our_pred_emg_mesh = _normalize_emg_for_mesh(our_pred_emg_8_t, sample.subject)
+                    item["our_pred_emg_plot"] = our_pred_emg_8_t
+                    item["our_pred_emg_mesh"] = our_pred_emg_mesh
+                else:
+                    if our_cache_file.exists():
+                        our_pred_joints = np.load(our_cache_file)
+                    else:
+                        our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
+                        np.save(our_cache_file, our_pred_joints)
+                        
+                    if not our_metric_file.exists():
+                        metric = _compute_official_metrics(our_pred_joints, item["raw_joints"][:, :25, :], task)
+                        with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                        
+                    item["our_pred_joints"] = our_pred_joints
+
     # Global Filtering
-    if filter_worst_n > 0:
-        # Collect all prepared items across all exercises
+    if filter_worst_n > 0 or filter_our_best_diff_n > 0:
         all_items_with_scores = []
         for exercise, (prepared, _) in all_prepared.items():
             temp_dir = out_dir / "temp" / exercise
             for item in prepared:
+                # Get Official RMSE
                 metric_file = temp_dir / f"{item['sample'].sample_id}_metric.json"
-                rmse = 0.0
+                official_rmse = 0.0
                 if metric_file.exists():
                     with open(metric_file, 'r') as mf:
                         m = json.load(mf)
-                        rmse = m.get("official_global_rmse", 0.0)
-                all_items_with_scores.append((rmse, item))
+                        official_rmse = m.get("official_global_rmse", 0.0)
+                
+                # Get Our RMSE
+                our_metric_file = temp_dir / f"{item['sample'].sample_id}_our_metric.json"
+                our_rmse = 0.0
+                if our_metric_file.exists():
+                    with open(our_metric_file, 'r') as mf:
+                        m = json.load(mf)
+                        our_rmse = m.get("official_global_rmse", 0.0)
+                
+                # Apply the max threshold filter
+                if filter_our_max_rmse_threshold < 999.0 and our_rmse > filter_our_max_rmse_threshold:
+                    continue
+                
+                if filter_our_best_diff_n > 0:
+                    score = official_rmse - our_rmse # Higher is better (we beat official by more)
+                else:
+                    score = official_rmse # Higher is worse
+                    
+                all_items_with_scores.append((score, item))
         
         # Sort globally descending
         all_items_with_scores.sort(key=lambda x: x[0], reverse=True)
-        global_worst_items = [x[1] for x in all_items_with_scores[:filter_worst_n]]
         
-        # Repackage into a single pseudo-exercise called "global_worst"
-        if global_worst_items:
-            global_max_t = max(item["emg_plot"].shape[1] if task != "pose2emg" else item["gt_emg_plot"].shape[1] for item in global_worst_items)
-            all_prepared = {"global_worst": (global_worst_items, global_max_t)}
+        target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
+        selected_items = []
+        if filter_diversity_exercise:
+            seen_exercises = set()
+            for score, item in all_items_with_scores:
+                ex = item["sample"].exercise
+                if ex not in seen_exercises:
+                    selected_items.append(item)
+                    seen_exercises.add(ex)
+                if len(selected_items) >= target_n:
+                    break
+        else:
+            selected_items = [x[1] for x in all_items_with_scores[:target_n]]
+        
+        # Repackage into a single pseudo-exercise
+        if selected_items:
+            pseudo_name = "global_best_diff" if filter_our_best_diff_n > 0 else "global_worst"
+            global_max_t = max(item["emg_plot"].shape[1] if task != "pose2emg" else item["gt_emg_plot"].shape[1] for item in selected_items)
+            all_prepared = {pseudo_name: (selected_items, global_max_t)}
         else:
             all_prepared = {}
 
@@ -598,24 +746,32 @@ def main() -> None:
                 item["gt_emg_mesh"] = _pad_emg_8_t(item["gt_emg_mesh"], max_t)
                 item["pred_emg_mesh"] = _pad_emg_8_t(item["pred_emg_mesh"], max_t)
                 
+                item["our_pred_emg_plot"] = _pad_emg_8_t(item["our_pred_emg_plot"], max_t)
+                item["our_pred_emg_mesh"] = _pad_emg_8_t(item["our_pred_emg_mesh"], max_t)
                 cell_frames = _render_sequence_cells_pose2emg(
-                    renderer, background, item["verts"], item["cam"], item["gt_emg_mesh"], item["pred_emg_mesh"],
-                    item["gt_emg_plot"], item["pred_emg_plot"], fps, plot_width, plot_height, plot_emg_vmax, mesh_views, debug_overlay_text
+                    renderer, background, item["verts"], item["cam"], item["gt_emg_mesh"], item["pred_emg_mesh"], item["our_pred_emg_mesh"],
+                    item["gt_emg_plot"], item["pred_emg_plot"], item["our_pred_emg_plot"], fps, plot_width, plot_height, plot_emg_vmax, mesh_views, debug_overlay_text
                 )
             else:
                 item["gt_joints"] = _pad_time_first(item["gt_joints"], max_t)
                 item["pred_joints"] = _pad_time_first(item["pred_joints"], max_t)
                 item["emg_plot"] = _pad_emg_8_t(item["emg_plot"], max_t)
                 
+
+                item["our_pred_joints"] = _pad_time_first(item["our_pred_joints"], max_t)
+                
+                
+                
                 cell_frames = _render_sequence_cells_emg2pose(
-                    item["gt_joints"], item["pred_joints"], item["emg_plot"], fps, plot_width, plot_height,
+
+                    item["gt_joints"], item["pred_joints"], item["our_pred_joints"], item["emg_plot"], fps, plot_width, plot_height,
                     render_width, render_height, plot_emg_vmax, debug_overlay_text
                 )
             cell_streams.append(cell_frames)
 
         cell_h, cell_w = cell_streams[0][0].shape[:2]
         
-        if filter_worst_n > 0:
+        if filter_worst_n > 0 or filter_our_best_diff_n > 0:
             vid_out_dir = out_dir / "selected"
         else:
             vid_out_dir = out_dir / exercise

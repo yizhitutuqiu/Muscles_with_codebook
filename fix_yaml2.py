@@ -1,0 +1,37 @@
+with open('/data/litengmo/HSMR/mia_custom/custom/vis/configs/vis_infer_final.yaml', 'w') as f:
+    f.write("""task: "emg2pose" # choices: "pose2emg", "emg2pose"
+dataset_root: "/data/litengmo/HSMR/mia_custom/MIADatasetOfficial"
+phase: "val"
+n_per_exercise: 1
+seed: 0
+max_exercises: 1
+
+filter_worst_n: 1 # if > 0, only visualize the n samples with highest RMSE per exercise
+
+pose2emg:
+  checkpoint: "/data/litengmo/HSMR/mia_custom/pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"
+  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/batch_stage2_h8_guided_moe/exp_h8_baseline_8exp/best.pt"
+
+emg2pose:
+  checkpoint: "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260510_000126/checkpoints/official_reproduction_cond_emgtopose_threed/model_100.pth"
+  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/batch_emg2pose_ablation/exp_emg2pose_ablation_h8_baseline/best.pt"
+
+smpl_src: "/data/litengmo/HSMR/SMPL_models/models/smpl"
+vibe_dst: "/data/litengmo/HSMR/mia_custom/musclesinaction/vibe_data"
+out_dir: "/data/litengmo/HSMR/mia_custom/custom/output"
+device: "cuda"
+fps: 10
+
+# Rendering dimensions
+render_width: 360
+render_height: 640
+plot_width: 420
+plot_height: 640
+
+plot_emg_vmax: 300.0
+mesh_views: "both" # choices: "front", "back", "both"
+
+debug_color_stats: false
+debug_overlay_text: false
+dry_run: false
+""")

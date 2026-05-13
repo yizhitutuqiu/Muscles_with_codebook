@@ -179,13 +179,18 @@ def _emg_standardizer_stats_bt8(standardizer, *, t: int, device: torch.device) -
     raise ValueError(f"Unsupported EMG standardizer dim={m}; expected 8 or T*8={int(t)*8}")
 
 
-def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device) -> FrameCodebookModel:
+def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device, *, overrides: Optional[Dict[str, Any]] = None) -> FrameCodebookModel:
     payload = torch.load(ckpt_path, map_location="cpu")
     if not isinstance(payload, dict) or "config" not in payload or "model_state" not in payload:
         raise RuntimeError(f"Stage1 checkpoint missing keys (config/model_state): {ckpt_path}")
     cfg = payload["config"]
 
     model_cfg = cfg["model"]
+    if overrides:
+        for k, v in dict(overrides).items():
+            if k == "checkpoint":
+                continue
+            model_cfg[k] = v
     vq_kwargs = dict(model_cfg["vq"])
     if "beta" not in vq_kwargs and "commitment_weight" in vq_kwargs:
         vq_kwargs["beta"] = vq_kwargs.pop("commitment_weight")
@@ -243,7 +248,9 @@ def _build_stage2_from_ckpt(
         mia_root = get_musclesinaction_repo_root()
         stage1_path = (mia_root / stage1_ckpt_str).resolve() if not Path(stage1_ckpt_str).is_absolute() else Path(stage1_ckpt_str)
 
-    stage1 = _build_stage1_from_ckpt(stage1_path, device=device)
+    methods = cfg.get("methods", {}) or {}
+    stage1_overrides = (methods.get("stage1", {}) or {}) if isinstance(methods, dict) else {}
+    stage1 = _build_stage1_from_ckpt(stage1_path, device=device, overrides=stage1_overrides)
 
     mcfg = cfg["model"]
     fusion_type = str(mcfg.get("fusion_type", "dcsa")).strip().lower()
