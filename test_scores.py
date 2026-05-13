@@ -24,6 +24,20 @@ for temp_dir in out_dir.glob("temp/*"):
         scores.append((score, official_rmse, our_rmse, temp_dir.name, sample_id))
 
 scores.sort(key=lambda x: x[0], reverse=True)
-for i in range(min(5, len(scores))):
-    print(f"Rank {i+1}: Exercise {scores[i][3]} Sample {scores[i][4]} | Score(Diff): {scores[i][0]:.4f} | Official: {scores[i][1]:.4f} | Our: {scores[i][2]:.4f}")
+
+filter_diversity_exercise = True
+seen_exercises = set()
+filtered_scores = []
+
+for s in scores:
+    exercise = s[3]
+    if filter_diversity_exercise:
+        if exercise in seen_exercises:
+            continue
+        seen_exercises.add(exercise)
+    filtered_scores.append(s)
+
+for i in range(min(5, len(filtered_scores))):
+    print(f"Rank {i+1}: Exercise {filtered_scores[i][3]} Sample {filtered_scores[i][4]} | Score(Diff): {filtered_scores[i][0]:.4f} | Official: {filtered_scores[i][1]:.4f} | Our: {filtered_scores[i][2]:.4f}")
+
 

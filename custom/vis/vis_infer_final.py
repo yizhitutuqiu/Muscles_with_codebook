@@ -150,7 +150,7 @@ def _load_our_model(checkpoint_path: Path, device: Any) -> tuple[Any, Any]:
 def _infer_our_pose2emg(model, stage1, joints3d_t_25_3, condval, device) -> np.ndarray:
     import torch
     joints3d_t_25_3 = joints3d_t_25_3[:, :25, :]
-    root = joints3d_t_25_3[:, 0:1, :]
+    root = joints3d_t_25_3[:, 8:9, :]
     inputs_np = joints3d_t_25_3 - root
     inputs = torch.from_numpy(inputs_np).unsqueeze(0).to(device)
     cond = torch.tensor([[condval]], dtype=torch.float32, device=device)
@@ -170,20 +170,12 @@ def _infer_our_emg2pose(model, stage1, emg_8_t, condval, device, joints3d_t_25_3
     inputs_np = emg_8_t.T
     inputs = torch.from_numpy(inputs_np).unsqueeze(0).to(device) # B, T, 8
     
-    # STANDARDIZE EMG
-    stage1_emg = getattr(stage1, "emg", None)
-    emg_standardizer = getattr(stage1_emg, "standardizer", None) if stage1_emg else None
-    if emg_standardizer is not None:
-        from custom.tools.Mia_style_eval import _emg_standardizer_stats_bt8
-        mean_bt8, std_bt8 = _emg_standardizer_stats_bt8(emg_standardizer, t=int(inputs.shape[1]), device=device)
-        inputs = (inputs - mean_bt8) / std_bt8
-        
     cond = torch.tensor([[condval]], dtype=torch.float32, device=device)
     with torch.no_grad():
         out = model(inputs, cond=cond)
         pred = out["pred"]
     pred_np = pred.squeeze(0).detach().cpu().numpy().astype(np.float32)
-    # Restore absolute coordinates using GT's Joint 8 (which is the root in Mia_style_eval)
+    
     joints3d_t_25_3 = joints3d_t_25_3[:, :25, :]
     root_8 = joints3d_t_25_3[:, 8:9, :]
     return pred_np + root_8
@@ -250,7 +242,7 @@ def _compute_3d_bounds(gt_joints: np.ndarray, pred_joints: np.ndarray) -> dict:
         'z_min': z_mid - max_range, 'z_max': z_mid + max_range,
     }
 
-def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None) -> np.ndarray:
+def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None, color_override: str = None) -> np.ndarray:
     fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
     ax = fig.add_subplot(1, 1, 1, projection='3d')
     ax.set_title(title)
@@ -259,16 +251,23 @@ def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, t
     colors = ['b','b','r','r','r','g','g','g','y','r','r','r','g','g','g','b','b','b','b','g','g','g','r','r','r']
     
     for j in range(25):
-        c = colors[j]
-        newc = 'blue' if c == 'b' else ('red' if c == 'r' else '#0f0f0f')
-        if j in [25, 30]: newc = 'yellow'
+        if color_override:
+            newc = color_override
+        else:
+            c = colors[j]
+            newc = 'blue' if c == 'b' else ('red' if c == 'r' else '#0f0f0f')
+            if j in [25, 30]: newc = 'yellow'
         ax.scatter3D(joints3d_25_3[j, 0], joints3d_25_3[j, 2], joints3d_25_3[j, 1], c=newc)
 
     for vertices, color in limb_seq:
+        if color_override:
+            line_color = color_override
+        else:
+            line_color = [c / 255.0 for c in color]
         ax.plot3D([joints3d_25_3[vertices[0], 0], joints3d_25_3[vertices[1], 0]],
                   [joints3d_25_3[vertices[0], 2], joints3d_25_3[vertices[1], 2]],
                   [joints3d_25_3[vertices[0], 1], joints3d_25_3[vertices[1], 1]],
-                  linewidth=3, color=[c / 255.0 for c in color], alpha=0.7)
+                  linewidth=3, color=line_color, alpha=0.7)
 
     if bounds:
         ax.set_xlim3d([bounds['x_min'], bounds['x_max']])
@@ -468,9 +467,9 @@ def _render_sequence_cells_emg2pose(
     frames = []
     bounds = _compute_3d_bounds(np.concatenate([gt_joints_t_25_3[:, :25], pred_joints_t_25_3[:, :25], our_joints_t_25_3[:, :25]], axis=0), np.zeros_like(gt_joints_t_25_3[:, :25])) # HACK: compute_3d_bounds handles concatenated
     for i in tqdm(range(t), desc="Rendering emg2pose frames", leave=False):
-        gt_skel = cv2.cvtColor(_render_skeleton_panel(gt_joints_t_25_3[i, :25], render_width, render_height, "GT 3D Pose", bounds), cv2.COLOR_RGB2BGR)
-        pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred", bounds), cv2.COLOR_RGB2BGR)
-        our_skel = cv2.cvtColor(_render_skeleton_panel(our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred", bounds), cv2.COLOR_RGB2BGR)
+        gt_skel = cv2.cvtColor(_render_skeleton_panel(gt_joints_t_25_3[i, :25], render_width, render_height, "GT 3D Pose", bounds, color_override='green'), cv2.COLOR_RGB2BGR)
+        pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred", bounds, color_override='red'), cv2.COLOR_RGB2BGR)
+        our_skel = cv2.cvtColor(_render_skeleton_panel(our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred", bounds, color_override='blue'), cv2.COLOR_RGB2BGR)
         overlay_skel = cv2.cvtColor(_render_overlay_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], our_joints_t_25_3[i, :25], render_width, render_height, "Overlay (GT:G, Off:R, Ours:B)", bounds), cv2.COLOR_RGB2BGR)
         
         gt_row = np.concatenate([gt_skel, panel_emg], axis=1)
@@ -500,7 +499,6 @@ def main() -> None:
     filter_worst_n = cfg.get("filter_worst_n", 0)
     filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     filter_our_max_rmse_threshold = cfg.get("filter_our_max_rmse_threshold", 999.0)
-    filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
     
     if task == "pose2emg":
         checkpoint_path = Path(cfg.get("pose2emg", {}).get("checkpoint", ""))
@@ -712,18 +710,22 @@ def main() -> None:
         all_items_with_scores.sort(key=lambda x: x[0], reverse=True)
         
         target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
+        
+        filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
+        seen_exercises = set()
         selected_items = []
-        if filter_diversity_exercise:
-            seen_exercises = set()
-            for score, item in all_items_with_scores:
-                ex = item["sample"].exercise
-                if ex not in seen_exercises:
-                    selected_items.append(item)
-                    seen_exercises.add(ex)
-                if len(selected_items) >= target_n:
-                    break
-        else:
-            selected_items = [x[1] for x in all_items_with_scores[:target_n]]
+        
+        for score, item in all_items_with_scores:
+            if len(selected_items) >= target_n:
+                break
+                
+            exercise_name = item['sample'].exercise
+            if filter_diversity_exercise:
+                if exercise_name in seen_exercises:
+                    continue
+                seen_exercises.add(exercise_name)
+                
+            selected_items.append(item)
         
         # Repackage into a single pseudo-exercise
         if selected_items:
