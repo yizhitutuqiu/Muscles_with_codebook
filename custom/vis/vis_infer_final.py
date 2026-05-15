@@ -299,6 +299,64 @@ def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, t
     plt.close(fig)
     return img
 
+def _render_dual_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None, pred_color: str = 'blue') -> np.ndarray:
+    fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
+    ax = fig.add_subplot(1, 1, 1, projection='3d')
+    ax.set_title(title)
+    
+    limb_seq = [([17, 15], None), ([15, 0], None), ([0, 16], None), ([16, 18], None), ([0, 1], None), ([1, 2], None), ([2, 3], None), ([3, 4], None), ([1, 5], None), ([5, 6], None), ([6, 7], None), ([1, 8], None), ([8, 9], None), ([9, 10], None), ([10, 24], None), ([8, 12], None), ([12, 13], None), ([13, 14], None), ([24, 22], None), ([24, 24], None), ([22, 23], None), ([14, 19], None), ([14, 21], None), ([19, 20], None)]
+    
+    # GT (Green)
+    for j in range(25):
+        ax.scatter3D(gt_joints_25_3[j, 0], gt_joints_25_3[j, 2], gt_joints_25_3[j, 1], c='green', s=15)
+    for vertices, _ in limb_seq:
+        ax.plot3D([gt_joints_25_3[vertices[0], 0], gt_joints_25_3[vertices[1], 0]],
+                  [gt_joints_25_3[vertices[0], 2], gt_joints_25_3[vertices[1], 2]],
+                  [gt_joints_25_3[vertices[0], 1], gt_joints_25_3[vertices[1], 1]],
+                  linewidth=2, color='green', alpha=0.7)
+                  
+    # Pred
+    for j in range(25):
+        ax.scatter3D(pred_joints_25_3[j, 0], pred_joints_25_3[j, 2], pred_joints_25_3[j, 1], c=pred_color, s=15)
+    for vertices, _ in limb_seq:
+        ax.plot3D([pred_joints_25_3[vertices[0], 0], pred_joints_25_3[vertices[1], 0]],
+                  [pred_joints_25_3[vertices[0], 2], pred_joints_25_3[vertices[1], 2]],
+                  [pred_joints_25_3[vertices[0], 1], pred_joints_25_3[vertices[1], 1]],
+                  linewidth=2, color=pred_color, alpha=0.7)
+                  
+    if bounds:
+        ax.set_xlim3d([bounds['x_min'], bounds['x_max']])
+        ax.set_ylim3d([bounds['y_min'], bounds['y_max']])
+        ax.set_zlim3d([bounds['z_min'], bounds['z_max']])
+        try:
+            ax.set_box_aspect([1, 1, 1])
+        except AttributeError:
+            pass
+    else:
+        minvaly, maxvaly = np.min(gt_joints_25_3[:, 2]), np.max(gt_joints_25_3[:, 2])
+        minvalz, maxvalz = np.min(gt_joints_25_3[:, 1]), np.max(gt_joints_25_3[:, 1])
+        minvalx, maxvalx = np.min(gt_joints_25_3[:, 0]), np.max(gt_joints_25_3[:, 0])
+        max_range = max(maxvalx - minvalx, maxvaly - minvaly, maxvalz - minvalz) / 2.0
+        mid_x, mid_y, mid_z = (maxvalx + minvalx)/2, (maxvaly + minvaly)/2, (maxvalz + minvalz)/2
+        ax.set_xlim3d([mid_x - max_range, mid_x + max_range])
+        ax.set_ylim3d([mid_y - max_range, mid_y + max_range])
+        ax.set_zlim3d([mid_z - max_range, mid_z + max_range])
+        
+    ax.invert_zaxis()
+    ax.set_xlabel("x")
+    ax.set_ylabel("z")
+    ax.set_zlabel("y")
+    ax.view_init(0, -90)
+    
+    fig.tight_layout(pad=0.2)
+    fig.canvas.draw()
+    if hasattr(fig.canvas, "buffer_rgba"): img = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()
+    else:
+        img = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close(fig)
+    return img
+
 def _render_overlay_skeleton_panel(gt_joints_25_3: np.ndarray, pred_joints_25_3: np.ndarray, our_joints_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None) -> np.ndarray:
     fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
     ax = fig.add_subplot(1, 1, 1, projection='3d')
@@ -456,27 +514,44 @@ def _render_sequence_cells_pose2emg(
 def _render_sequence_cells_emg2pose(
     gt_joints_t_25_3: np.ndarray, pred_joints_t_25_3: np.ndarray, our_joints_t_25_3: np.ndarray, emg_plot_8_t: np.ndarray,
     fps: int, plot_width: int, plot_height: int, render_width: int, render_height: int, plot_vmax: float, debug_overlay_text: bool,
-    align_root_to_gt: bool = False
+    align_root_to_gt: bool = False, render_four_rows: bool = False, render_emg_curves: bool = False
 ) -> list[np.ndarray]:
     if align_root_to_gt:
         pred_joints_t_25_3 = pred_joints_t_25_3 - pred_joints_t_25_3[:, 0:1, :] + gt_joints_t_25_3[:, 0:1, :]
         our_joints_t_25_3 = our_joints_t_25_3 - our_joints_t_25_3[:, 0:1, :] + gt_joints_t_25_3[:, 0:1, :]
 
     t = gt_joints_t_25_3.shape[0]
-    panel_emg = cv2.cvtColor(_render_emg_panel(emg_plot_8_t, plot_width, plot_height, "Input EMG", vmax=plot_vmax), cv2.COLOR_RGB2BGR)
+    if render_emg_curves:
+        panel_emg = cv2.cvtColor(_render_emg_panel(emg_plot_8_t, plot_width, plot_height, "Input EMG", vmax=plot_vmax), cv2.COLOR_RGB2BGR)
     frames = []
     bounds = _compute_3d_bounds(np.concatenate([gt_joints_t_25_3[:, :25], pred_joints_t_25_3[:, :25], our_joints_t_25_3[:, :25]], axis=0), np.zeros_like(gt_joints_t_25_3[:, :25])) # HACK: compute_3d_bounds handles concatenated
     for i in tqdm(range(t), desc="Rendering emg2pose frames", leave=False):
-        gt_skel = cv2.cvtColor(_render_skeleton_panel(gt_joints_t_25_3[i, :25], render_width, render_height, "GT 3D Pose", bounds, color_override='green'), cv2.COLOR_RGB2BGR)
-        pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred", bounds, color_override='red'), cv2.COLOR_RGB2BGR)
-        our_skel = cv2.cvtColor(_render_skeleton_panel(our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred", bounds, color_override='blue'), cv2.COLOR_RGB2BGR)
-        overlay_skel = cv2.cvtColor(_render_overlay_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], our_joints_t_25_3[i, :25], render_width, render_height, "Overlay (GT:G, Off:R, Ours:B)", bounds), cv2.COLOR_RGB2BGR)
-        
-        gt_row = np.concatenate([gt_skel, panel_emg], axis=1)
-        pred_row = np.concatenate([pred_skel, panel_emg], axis=1)
-        our_row = np.concatenate([our_skel, panel_emg], axis=1)
-        overlay_row = np.concatenate([overlay_skel, panel_emg], axis=1)
-        frames.append(np.concatenate([gt_row, pred_row, our_row, overlay_row], axis=0))
+        if render_four_rows:
+            gt_skel = cv2.cvtColor(_render_skeleton_panel(gt_joints_t_25_3[i, :25], render_width, render_height, "GT 3D Pose", bounds, color_override='green'), cv2.COLOR_RGB2BGR)
+            pred_skel = cv2.cvtColor(_render_skeleton_panel(pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred (MIA)", bounds, color_override='red'), cv2.COLOR_RGB2BGR)
+            our_skel = cv2.cvtColor(_render_skeleton_panel(our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred", bounds, color_override='blue'), cv2.COLOR_RGB2BGR)
+            overlay_skel = cv2.cvtColor(_render_overlay_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], our_joints_t_25_3[i, :25], render_width, render_height, "Overlay (GT:G, Off:R, Ours:B)", bounds), cv2.COLOR_RGB2BGR)
+            
+            if render_emg_curves:
+                gt_row = np.concatenate([gt_skel, panel_emg], axis=1)
+                pred_row = np.concatenate([pred_skel, panel_emg], axis=1)
+                our_row = np.concatenate([our_skel, panel_emg], axis=1)
+                overlay_row = np.concatenate([overlay_skel, panel_emg], axis=1)
+            else:
+                gt_row, pred_row, our_row, overlay_row = gt_skel, pred_skel, our_skel, overlay_skel
+                
+            frames.append(np.concatenate([gt_row, pred_row, our_row, overlay_row], axis=0))
+        else:
+            row1_skel = cv2.cvtColor(_render_dual_skeleton_panel(gt_joints_t_25_3[i, :25], pred_joints_t_25_3[i, :25], render_width, render_height, "Official Pred (MIA) (B) vs GT(G)", bounds, pred_color='blue'), cv2.COLOR_RGB2BGR)
+            row2_skel = cv2.cvtColor(_render_dual_skeleton_panel(gt_joints_t_25_3[i, :25], our_joints_t_25_3[i, :25], render_width, render_height, "Our Pred(B) vs GT(G)", bounds, pred_color='blue'), cv2.COLOR_RGB2BGR)
+            
+            if render_emg_curves:
+                row1 = np.concatenate([row1_skel, panel_emg], axis=1)
+                row2 = np.concatenate([row2_skel, panel_emg], axis=1)
+            else:
+                row1, row2 = row1_skel, row2_skel
+                
+            frames.append(np.concatenate([row1, row2], axis=0))
     return frames
 
 def main() -> None:
@@ -527,6 +602,8 @@ def main() -> None:
     debug_overlay_text = cfg.get("debug_overlay_text", False)
     dry_run = cfg.get("dry_run", False)
     align_root_to_gt = cfg.get("align_root_to_gt", False)
+    render_four_rows = cfg.get("render_four_rows", False)
+    render_emg_curves = cfg.get("render_emg_curves", False)
 
     random.seed(seed)
     
@@ -765,9 +842,8 @@ def main() -> None:
                 
                 
                 cell_frames = _render_sequence_cells_emg2pose(
-
                     item["gt_joints"], item["pred_joints"], item["our_pred_joints"], item["emg_plot"], fps, plot_width, plot_height,
-                    render_width, render_height, plot_emg_vmax, debug_overlay_text
+                    render_width, render_height, plot_emg_vmax, debug_overlay_text, align_root_to_gt, render_four_rows, render_emg_curves
                 )
             cell_streams.append(cell_frames)
 

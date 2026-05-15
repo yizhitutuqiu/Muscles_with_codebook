@@ -716,9 +716,16 @@ def _is_exercise_name(val_filelist: str) -> bool:
         return False
     if "Subject" in s:
         return False
-    if "_" in s:
-        return False
     return True
+
+
+def _normalize_exercise_name(val_name: str) -> str:
+    s = str(val_name).strip()
+    if s.startswith("val_"):
+        s = s[len("val_") :]
+    elif s.startswith("val"):
+        s = s[len("val") :]
+    return s.strip("_").strip()
 
 
 def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str], task: str = "pose2emg") -> Path:
@@ -736,7 +743,7 @@ def _process_and_save_summary(summary_csv_path: Path, methods: Sequence[str], ta
         rmse = r.get("official_global_rmse", None)
 
         if proto == "id_exercises" or _is_exercise_name(val_name):
-            val_name = val_name.replace("val", "").replace(".txt", "")
+            val_name = _normalize_exercise_name(val_name)
             if method not in methods:
                 continue
             if val_name not in table:

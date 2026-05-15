@@ -182,6 +182,7 @@ class Stage2Pose2EMG(nn.Module):
         self.temporal = build_temporal_backbone(
             cfg.temporal_type,
             dim=dim,
+            task=self.task,
             dst_cfg=cfg.dst,
             dst_v2=cfg.dst_v2,
             dst_v3_moe=cfg.dst_v3_moe,
@@ -372,14 +373,21 @@ class Stage2Pose2EMG(nn.Module):
         if hasattr(self.temporal, "forward"):
             import inspect
             sig = inspect.signature(self.temporal.forward)
+            kwargs = {}
             if "guide" in sig.parameters:
-                z_out = self.temporal(z_fused, guide=guide_feat)
-            else:
-                z_out = self.temporal(z_fused)
+                kwargs["guide"] = guide_feat
+            if "raw_inputs" in sig.parameters:
+                kwargs["raw_inputs"] = inputs
+            if "cond" in sig.parameters:
+                kwargs["cond"] = cond
+            z_out = self.temporal(z_fused, **kwargs)
         else:
             z_out = self.temporal(z_fused)
             
-        net_out = self.emg_head(z_out)  # (B,T,8) or (B,T,75)
+        if bool(getattr(self.temporal, "produces_pred", False)):
+            net_out = z_out
+        else:
+            net_out = self.emg_head(z_out)  # (B,T,8) or (B,T,75)
 
         pred_mode = str(self.cfg.emg_pred_mode).strip().lower()
         if pred_mode == "residual":

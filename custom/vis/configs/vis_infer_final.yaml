@@ -33,6 +33,8 @@ plot_height: 640
 plot_emg_vmax: 300.0
 mesh_views: "both" # choices: "front", "back", "both"
 align_root_to_gt: false
+render_four_rows: false # if true, renders 4 rows (GT, Official, Ours, Overlay). if false, renders 2 rows (Official+GT, Ours+GT)
+render_emg_curves: false # if true, renders the EMG input curves next to the skeletons
 
 debug_color_stats: false
 debug_overlay_text: false

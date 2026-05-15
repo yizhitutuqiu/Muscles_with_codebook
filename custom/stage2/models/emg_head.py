@@ -112,6 +112,11 @@ class FlattenEMGHead(nn.Module):
         return self.net(flat)
 
 
+class IdentityEMGHead(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+
+
 # residual 模式下最后一层初始化：权重用极小高斯，偏置为 0，既保证初值≈0 又让梯度能回传（避免零初始化梯度断崖）
 NEAR_ZERO_INIT_STD: float = 1e-4
 
@@ -149,4 +154,6 @@ def build_emg_head(head_type: str, cfg: EMGHeadConfig) -> nn.Module:
         return FlattenEMGHead(cfg)
     if head_type in ("spatial_pool", "pool"):
         return SpatialPoolingEMGHead(cfg)
-    raise ValueError(f"Unknown emg_head_type={head_type!r}. Use 'mixer', 'flatten', or 'spatial_pool'.")
+    if head_type in ("identity", "none", "bypass"):
+        return IdentityEMGHead()
+    raise ValueError(f"Unknown emg_head_type={head_type!r}. Use 'mixer', 'flatten', 'spatial_pool', or 'identity'.")

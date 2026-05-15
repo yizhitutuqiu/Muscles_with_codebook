@@ -1,0 +1,13 @@
+exercise,official_cond_mpjpe,official_nocond_mpjpe,checkpoint
+ElbowPunch,0.079976,0.079978,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_ElbowPunch_emgtopose/model_100.pth
+FrontKick,0.097119,0.097125,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_FrontKick_emgtopose/model_100.pth
+FrontPunch,0.083559,0.083569,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_FrontPunch_emgtopose/model_100.pth
+HighKick,0.133363,0.133364,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_HighKick_emgtopose/model_100.pth
+HookPunch,0.091878,0.091882,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_HookPunch_emgtopose/model_100.pth
+JumpingJack,0.129302,0.129302,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_JumpingJack_emgtopose/model_100.pth
+KneeKick,0.112690,0.112706,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_KneeKick_emgtopose/model_100.pth
+LegBack,0.105069,0.105066,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_LegBack_emgtopose/model_100.pth
+LegCross,0.119298,0.119284,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_LegCross_emgtopose/model_100.pth
+RonddeJambe,0.130959,0.130968,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_RonddeJambe_emgtopose/model_100.pth
+Running,0.064846,0.064849,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_20260514_111255/checkpoints/official_ood_cond_Running_emgtopose/latestcheckpoint.pth
+Average,0.104369,0.104372,
