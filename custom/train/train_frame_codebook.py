@@ -809,8 +809,9 @@ def main() -> None:
             try:
                 model.load_state_dict(state, strict=True)
             except Exception as e:
-                if "unexpected key" in str(e) or "missing key" in str(e):
-                    print(f"[Checkpoint] strict=True 失败（可能为旧 TCN BatchNorm 的 running_*），改用 strict=False 加载 {ckpt_path}")
+                msg = str(e)
+                if "unexpected key" in msg or "missing key" in msg:
+                    print(f"[Checkpoint] strict=True 失败（unexpected/missing key），改用 strict=False 加载 {ckpt_path}")
                     model.load_state_dict(state, strict=False)
                 else:
                     raise

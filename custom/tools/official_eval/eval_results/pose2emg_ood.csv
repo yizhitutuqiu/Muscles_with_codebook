@@ -8,5 +8,10 @@ JumpingJack,39.369602,37.851955,/data/litengmo/HSMR/mia_custom/custom/tools/offi
 KneeKick,13.197797,12.861913,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_KneeKick_posetoemg/model_100.pth
 LegBack,16.255650,15.956297,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_LegBack_posetoemg/model_100.pth
 LegCross,15.308188,15.234367,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_LegCross_posetoemg/model_100.pth
-RonddeJambe,31.888581,30.133209,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_RonddeJambe_posetoemg/latestcheckpoint.pth
-Average,19.710320,19.683287,
+RonddeJambe,32.891604,31.297053,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_RonddeJambe_posetoemg/model_100.pth
+Running,13.965538,12.598027,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_Running_posetoemg/model_100.pth
+Shuffle,14.070026,14.271759,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_Shuffle_posetoemg/model_100.pth
+SideLunges,24.763614,24.781202,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_SideLunges_posetoemg/model_100.pth
+SlowSkater,20.359291,20.823257,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_SlowSkater_posetoemg/model_100.pth
+Squat,27.844181,28.856796,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_20260514_104627/checkpoints/official_ood_cond_Squat_posetoemg/model_100.pth
+Average,19.940591,19.955184,
