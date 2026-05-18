@@ -222,6 +222,10 @@ def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device, *, overrides:
         smpl_pose=None,
         emg=_mod("emg", mods["emg"]),
         encoder_decoder_only=bool(model_cfg.get("encoder_decoder_only", False)),
+        use_semantic_aux=bool(model_cfg.get("use_semantic_aux", False)),
+        shared_semantic_head=bool(model_cfg.get("shared_semantic_head", True)),
+        num_classes=int(model_cfg.get("num_classes", 15)),
+        semantic_aux_weight=float(model_cfg.get("semantic_aux_weight", 0.1)),
     )
     m = FrameCodebookModel(stage1_cfg).to(device)
     m.load_state_dict(payload["model_state"], strict=True)

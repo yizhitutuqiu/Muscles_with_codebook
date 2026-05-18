@@ -22,9 +22,9 @@ runtime:
     enabled: true
     total_steps: null
     phase1_frac: 0.10
-    phase2_end_frac: 0.5
+    phase2_end_frac: 1.0
     beta_free: 0.0
-    beta_target: 1.0
+    beta_target: 1.5
     ramp: linear
 
 optimizer:
@@ -72,7 +72,7 @@ model:
     vq_emg: 1.0
 
   vq:
-    num_codes: 128
+    num_codes: 256
     code_dim: 256
     decay: 0.99
     eps: 1.0e-5
