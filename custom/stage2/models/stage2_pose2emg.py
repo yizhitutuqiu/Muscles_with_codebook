@@ -56,6 +56,8 @@ class Stage2Pose2EMGConfig:
     # 时空位置编码：joint_25 时在 z_cont 送入 DCSA 前注入，时间维最大长度
     max_seq_len: int = 256
     use_cond: bool = False
+    mia_official_moe_num_experts: int = 4
+    mia_official_moe_router_in_dim: int = 256
 
 
 class Stage2Pose2EMG(nn.Module):
@@ -183,6 +185,8 @@ class Stage2Pose2EMG(nn.Module):
             cfg.temporal_type,
             dim=dim,
             task=self.task,
+            mia_official_moe_num_experts=int(getattr(cfg, "mia_official_moe_num_experts", 4)),
+            mia_official_moe_router_in_dim=int(getattr(cfg, "mia_official_moe_router_in_dim", dim)),
             dst_cfg=cfg.dst,
             dst_v2=cfg.dst_v2,
             dst_v3_moe=cfg.dst_v3_moe,
