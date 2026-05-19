@@ -271,160 +271,11 @@ class MiaOfficialLightTransformerTemporal(nn.Module):
         return out0.permute(0, 2, 1)
 
 
-class MiaOfficialLightTransformerMoEFFNTemporal(nn.Module):
-    produces_pred: bool = True
-
-    def __init__(self, *, task: str, num_experts: int = 4, router_in_dim: int = 256):
-        super().__init__()
-        self.task = str(task).strip().lower()
-        self.num_experts = int(num_experts)
-        self.router_in_dim = int(router_in_dim)
-
-        if self.task == "pose2emg":
-            from musclesinaction.models import modelposetoemg as _transmodel
-
-            self.net = _transmodel.TransformerEnc(
-                threed="True",
-                num_tokens=50,
-                dim_model=128,
-                num_classes=20,
-                num_heads=16,
-                classif=False,
-                num_encoder_layers=8,
-                num_decoder_layers=3,
-                dropout_p=0.1,
-                device="cuda",
-                embedding=True,
-                step=30,
-            )
-            self._expected_in = "joints3d"
-            self._out_dim = 8
-        elif self.task == "emg2pose":
-            from musclesinaction.models import modelemgtopose as _transmodel
-
-            self.net = _transmodel.TransformerEnc(
-                threed="True",
-                num_tokens=50,
-                dim_model=128,
-                num_classes=20,
-                num_heads=16,
-                classif=False,
-                num_encoder_layers=8,
-                num_decoder_layers=3,
-                dropout_p=0.1,
-                device="cuda",
-                embedding=True,
-                step=30,
-            )
-            self._expected_in = "emg"
-            self._out_dim = 75
-        else:
-            raise ValueError(f"Unknown task={task!r} for MiaOfficialLightTransformerMoEFFNTemporal")
-
-        from .moe_ffn import TransformerEncoderLayerMoE
-
-        self.layers = nn.ModuleList(
-            [
-                TransformerEncoderLayerMoE(
-                    d_model=128,
-                    nhead=16,
-                    dim_feedforward=2048,
-                    dropout=0.1,
-                    num_experts=self.num_experts,
-                    router_in_dim=self.router_in_dim,
-                )
-                for _ in range(8)
-            ]
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        *,
-        raw_inputs: torch.Tensor,
-        guide: Optional[torch.Tensor] = None,
-        cond: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        if raw_inputs.ndim not in (3, 4):
-            raise ValueError(f"raw_inputs must be (B,T,8) or (B,T,25,3), got {tuple(raw_inputs.shape)}")
-        b, t = int(raw_inputs.shape[0]), int(raw_inputs.shape[1])
-        if t != 30:
-            raise ValueError(f"Official transformer expects T=30 (step=30), got T={t}")
-
-        if cond is None:
-            condval = torch.zeros((b,), device=raw_inputs.device, dtype=torch.float32)
-        else:
-            condval = cond.reshape(b).to(device=raw_inputs.device, dtype=torch.float32)
-
-        if x.ndim != 4:
-            raise ValueError(f"Expected fused features x as (B,T,N,C), got {tuple(x.shape)}")
-        fused_bias = x.mean(dim=2)
-        if fused_bias.shape[-1] < 126:
-            fused_bias = torch.nn.functional.pad(fused_bias, (0, 126 - fused_bias.shape[-1]))
-        fused_bias = fused_bias[:, :, :126]
-
-        if guide is None:
-            router_bt = torch.zeros((b, t, self.router_in_dim), device=raw_inputs.device, dtype=torch.float32)
-        else:
-            if guide.ndim == 4:
-                router_bt = guide.mean(dim=2)
-            elif guide.ndim == 3:
-                router_bt = guide
-            else:
-                raise ValueError(f"guide must be (B,T,N,C) or (B,T,C), got {tuple(guide.shape)}")
-            if router_bt.shape[-1] < self.router_in_dim:
-                router_bt = torch.nn.functional.pad(router_bt, (0, self.router_in_dim - router_bt.shape[-1]))
-            router_bt = router_bt[:, :, : self.router_in_dim].to(device=raw_inputs.device, dtype=torch.float32)
-
-        router_tbr = router_bt.permute(1, 0, 2).contiguous()
-
-        if self._expected_in == "joints3d":
-            if raw_inputs.ndim != 4 or raw_inputs.shape[-2:] != (25, 3):
-                raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(raw_inputs.shape)}")
-            src = raw_inputs.reshape(b, t, 75)
-            src = src.float() * math.sqrt(self.net.dim_model)
-            src = torch.unsqueeze(src, dim=1).permute(0, 1, 3, 2)
-            srcorig = self.net.conv1(src)[:, :, 0, :].permute(0, 2, 1)
-            srcorig = srcorig + fused_bias.to(device=srcorig.device, dtype=srcorig.dtype)
-            src = self.net.positional_encoder(srcorig)
-            condition = torch.ones(src.shape[0], src.shape[1], 2, device=src.device, dtype=src.dtype) * condval.reshape(
-                condval.shape[0], 1, 1
-            ).to(device=src.device, dtype=src.dtype)
-            srccat = torch.cat([src, condition], dim=2)
-            h = srccat.permute(1, 0, 2)
-            for layer in self.layers:
-                h = layer(h, router_src=router_tbr, src_key_padding_mask=None)
-            out0 = self.net.out0(h)
-            out0 = out0.permute(1, 2, 0)
-            return out0.permute(0, 2, 1)
-
-        if raw_inputs.ndim != 3 or raw_inputs.shape[-1] != 8:
-            raise ValueError(f"Expected emg (B,T,8), got {tuple(raw_inputs.shape)}")
-        src = raw_inputs.permute(0, 2, 1)
-        src = src.float() * math.sqrt(self.net.dim_model)
-        src = torch.unsqueeze(src, dim=1).permute(0, 1, 2, 3)
-        src = self.net.conv1(src)[:, :, 0, :].permute(0, 2, 1)
-        src = src + fused_bias.to(device=src.device, dtype=src.dtype)
-        src = self.net.positional_encoder(src)
-        condition = torch.ones(src.shape[0], src.shape[1], 2, device=src.device, dtype=src.dtype) * condval.reshape(
-            condval.shape[0], 1, 1
-        ).to(device=src.device, dtype=src.dtype)
-        srccat = torch.cat([src, condition], dim=2)
-        h = srccat.permute(1, 0, 2)
-        for layer in self.layers:
-            h = layer(h, router_src=router_tbr, src_key_padding_mask=None)
-        out0 = self.net.out0(h)
-        out0 = out0.permute(1, 2, 0)
-        return out0.permute(0, 2, 1)
-
-
 def build_temporal_backbone(
     temporal_type: str,
     dim: int,
     *,
     task: Optional[str] = None,
-    mia_official_moe_num_experts: int = 4,
-    mia_official_moe_router_in_dim: int = 256,
     dst_cfg: Optional[DSTFormerConfig] = None,
     dst_v2: Optional[DSTFormerV2Config] = None,
     dst_v3_moe: Optional[DSTFormerV3MoEConfig] = None,
@@ -491,14 +342,6 @@ def build_temporal_backbone(
         if task is None:
             raise ValueError("temporal_type=official requires task to be provided")
         return MiaOfficialLightTransformerTemporal(task=task)
-    if temporal_type in ("mia_official_transformer_moe_ffn", "mia_official_moe_ffn", "official_transformer_moe_ffn"):
-        if task is None:
-            raise ValueError("temporal_type=official_moe_ffn requires task to be provided")
-        return MiaOfficialLightTransformerMoEFFNTemporal(
-            task=task,
-            num_experts=int(mia_official_moe_num_experts),
-            router_in_dim=int(mia_official_moe_router_in_dim),
-        )
     if temporal_type == "tcn":
         cfg = tcn_cfg or TCNBackboneConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("hidden_dim", "kernel_size", "num_layers", "dilation_base", "dropout")})
         return TCNTemporalBackbone(cfg)

@@ -459,8 +459,6 @@ def _run_training(
         emg_pred_mode=str(model_cfg.get("emg_pred_mode", "full")).strip().lower(),
         max_seq_len=int(model_cfg.get("max_seq_len", 256)),
         use_cond=bool(model_cfg.get("use_cond", False)),
-        mia_official_moe_num_experts=int(model_cfg.get("mia_official_moe_num_experts", 4)),
-        mia_official_moe_router_in_dim=int(model_cfg.get("mia_official_moe_router_in_dim", dim)),
     )
 
     model = Stage2Pose2EMG(stage2_cfg, stage1=stage1).to(device)
