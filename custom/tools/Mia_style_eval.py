@@ -599,65 +599,27 @@ def _eval_official_model_on_filelist(
     return pred_cat, gt_cat, per_sequence_rows
 
 
+from custom.tools.utils.retrieval_baseline import build_retrieval_db as _build_retrieval_db_impl
+from custom.tools.utils.retrieval_baseline import eval_retrieval_on_filelist as _eval_retrieval_on_filelist_impl
+
+
 def _build_retrieval_db(
     *,
     loader: DataLoader,
+    task: str,
     device: torch.device,
     joints3d_root_center: bool,
     joints3d_root_index: int,
     max_samples: Optional[int],
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    xs: List[torch.Tensor] = []
-    ys: List[torch.Tensor] = []
-    seen = 0
-    for batch in tqdm(loader, desc="retrieval_db", unit="batch"):
-        joints3d = torch.as_tensor(batch["3dskeleton"], device=device, dtype=torch.float32)
-        emg = torch.as_tensor(batch["emg_values"], device=device, dtype=torch.float32)
-        if joints3d_root_center:
-            joints3d = _root_center_joints3d(joints3d, joints3d_root_index)
-        gt_bt8 = emg.permute(0, 2, 1).contiguous()
-        b = int(joints3d.shape[0])
-        x = joints3d.reshape(b, -1).contiguous()
-        y = gt_bt8.reshape(b, -1).contiguous()
-        xs.append(x)
-        ys.append(y)
-        seen += b
-        if max_samples is not None and seen >= int(max_samples):
-            break
-    xtr = torch.cat(xs, dim=0)
-    ytr = torch.cat(ys, dim=0)
-    if max_samples is not None and int(xtr.shape[0]) > int(max_samples):
-        xtr = xtr[: int(max_samples)]
-        ytr = ytr[: int(max_samples)]
-    return xtr, ytr
-
-
-def _predict_retrieval(
-    *,
-    xtr: torch.Tensor,
-    ytr: torch.Tensor,
-    xq: torch.Tensor,
-    train_chunk_size: int,
-) -> torch.Tensor:
-    if xq.ndim != 2 or xtr.ndim != 2:
-        raise ValueError(f"Expected xq/xtr 2D, got {tuple(xq.shape)} {tuple(xtr.shape)}")
-    q_norm = (xq * xq).sum(dim=1, keepdim=True)
-    best_dist = torch.full((xq.shape[0],), float("inf"), device=xq.device, dtype=torch.float32)
-    best_idx = torch.zeros((xq.shape[0],), device=xq.device, dtype=torch.long)
-    n_train = int(xtr.shape[0])
-    for start in range(0, n_train, int(train_chunk_size)):
-        end = min(start + int(train_chunk_size), n_train)
-        chunk = xtr[start:end]
-        chunk_norm = (chunk * chunk).sum(dim=1).unsqueeze(0)
-        prod = xq @ chunk.t()
-        dist2 = q_norm + chunk_norm - 2.0 * prod
-        idx_in_chunk = torch.argmin(dist2, dim=1)
-        dist_in_chunk = dist2.gather(1, idx_in_chunk.view(-1, 1)).squeeze(1)
-        better = dist_in_chunk < best_dist
-        if better.any():
-            best_dist = torch.where(better, dist_in_chunk, best_dist)
-            best_idx = torch.where(better, idx_in_chunk + start, best_idx)
-    return ytr[best_idx]
+    return _build_retrieval_db_impl(
+        loader=loader,
+        task=task,
+        device=device,
+        joints3d_root_center=joints3d_root_center,
+        joints3d_root_index=joints3d_root_index,
+        max_samples=max_samples,
+    )
 
 
 def _eval_retrieval_on_filelist(
@@ -665,53 +627,23 @@ def _eval_retrieval_on_filelist(
     xtr: torch.Tensor,
     ytr: torch.Tensor,
     loader: DataLoader,
+    task: str,
     device: torch.device,
     joints3d_root_center: bool,
     joints3d_root_index: int,
     train_chunk_size: int,
 ) -> Tuple[np.ndarray, np.ndarray, List[Dict[str, Any]]]:
-    pred_all: List[np.ndarray] = []
-    gt_all: List[np.ndarray] = []
-    per_sequence_rows: List[Dict[str, Any]] = []
-    sample_counter = 0
-
-    for batch in tqdm(loader, desc="retrieval", unit="batch"):
-        joints3d = torch.as_tensor(batch["3dskeleton"], device=device, dtype=torch.float32)
-        emg = torch.as_tensor(batch["emg_values"], device=device, dtype=torch.float32)
-        if joints3d_root_center:
-            joints3d = _root_center_joints3d(joints3d, joints3d_root_index)
-        gt_bt8 = emg.permute(0, 2, 1).contiguous()
-        b, t, _ = gt_bt8.shape
-        xq = joints3d.reshape(b, -1).contiguous()
-        with torch.no_grad():
-            ypred_flat = _predict_retrieval(xtr=xtr, ytr=ytr, xq=xq, train_chunk_size=train_chunk_size)
-        pred_bt8 = ypred_flat.view(b, t, 8)
-
-        pred_np = pred_bt8.detach().cpu().numpy()
-        gt_np = gt_bt8.detach().cpu().numpy()
-        pred_all.append(pred_np.reshape(b * t, 8))
-        gt_all.append(gt_np.reshape(b * t, 8))
-
-        filepaths = _get_filepaths_from_batch(batch, int(gt_np.shape[0]))
-        for i in range(int(gt_np.shape[0])):
-            seq_sq_err = np.square(pred_np[i] - gt_np[i])
-            seq_abs_err = np.abs(pred_np[i] - gt_np[i])
-            row = {
-                "eval_index": sample_counter,
-                "filepath": filepaths[i],
-                "frames": int(gt_np.shape[1]),
-                "mse": float(np.mean(seq_sq_err)),
-                "rmse": float(math.sqrt(np.mean(seq_sq_err))),
-                "mae": float(np.mean(seq_abs_err)),
-            }
-            for ch in range(8):
-                row[f"rmse_{MUSCLE_NAMES[ch]}"] = float(math.sqrt(np.mean(seq_sq_err[:, ch])))
-            per_sequence_rows.append(row)
-            sample_counter += 1
-
-    pred_cat = np.concatenate(pred_all, axis=0)
-    gt_cat = np.concatenate(gt_all, axis=0)
-    return pred_cat, gt_cat, per_sequence_rows
+    return _eval_retrieval_on_filelist_impl(
+        xtr=xtr,
+        ytr=ytr,
+        loader=loader,
+        task=task,
+        device=device,
+        joints3d_root_center=joints3d_root_center,
+        joints3d_root_index=joints3d_root_index,
+        train_chunk_size=train_chunk_size,
+        muscle_names=MUSCLE_NAMES,
+    )
 
 
 def _is_exercise_name(val_filelist: str) -> bool:
@@ -881,24 +813,26 @@ def main() -> None:
 
     official_nocond_model = None
     official_nocond_ckpt = None
-    if official_nocond_enabled and task != "emg2pose":
-        m = methods_cfg.get("official_nocond", {}) or {}
-        cfg_path_val = str(m.get("checkpoint", ""))
-        
-        # 如果配置文件里没有配，或者配了但是文件不存在（比如之前默认的 pretrained-checkpoints 里的 nocond 路径）
-        # 则使用我们自己训练的 nocond 权重路径作为 fallback。
-        fallback_path = "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260410_102342/checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth"
-        
-        if cfg_path_val:
-            ckpt = Path(cfg_path_val).expanduser()
-            official_nocond_ckpt = ckpt if ckpt.is_absolute() else (mia_root / ckpt).resolve()
-            
-        if not official_nocond_ckpt or not official_nocond_ckpt.exists():
-            official_nocond_ckpt = Path(fallback_path).resolve()
-            
-        if not official_nocond_ckpt.exists():
-            raise FileNotFoundError(f"Official nocond checkpoint not found: {official_nocond_ckpt}")
-        official_nocond_model, _, _ = _load_official_model(official_nocond_ckpt, device=device, task=task)
+    if official_nocond_enabled:
+        if task == "emg2pose":
+            official_nocond_model = official_cond_model
+            official_nocond_ckpt = official_cond_ckpt
+        else:
+            m = methods_cfg.get("official_nocond", {}) or {}
+            cfg_path_val = str(m.get("checkpoint", ""))
+
+            fallback_path = "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260410_102342/checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth"
+
+            if cfg_path_val:
+                ckpt = Path(cfg_path_val).expanduser()
+                official_nocond_ckpt = ckpt if ckpt.is_absolute() else (mia_root / ckpt).resolve()
+
+            if not official_nocond_ckpt or not official_nocond_ckpt.exists():
+                official_nocond_ckpt = Path(fallback_path).resolve()
+
+            if not official_nocond_ckpt.exists():
+                raise FileNotFoundError(f"Official nocond checkpoint not found: {official_nocond_ckpt}")
+            official_nocond_model, _, _ = _load_official_model(official_nocond_ckpt, device=device, task=task)
 
     retrieval_cfg = methods_cfg.get("retrieval", {}) or {}
     retrieval_device = torch.device(str((runtime.get("retrieval", {}) or {}).get("device", "cpu")))
@@ -1124,6 +1058,7 @@ def main() -> None:
                 )
                 xtr, ytr = _build_retrieval_db(
                     loader=train_loader,
+                    task=task,
                     device=retrieval_device,
                     joints3d_root_center=joints3d_root_center,
                     joints3d_root_index=joints3d_root_index,
@@ -1147,12 +1082,13 @@ def main() -> None:
                 xtr=xtr,
                 ytr=ytr,
                 loader=val_loader,
+                task=task,
                 device=retrieval_device,
                 joints3d_root_center=joints3d_root_center,
                 joints3d_root_index=joints3d_root_index,
                 train_chunk_size=retrieval_train_chunk,
             )
-            metrics = _compute_official_metrics(pred_cat, gt_cat)
+            metrics = _compute_official_metrics(pred_cat, gt_cat, task=task)
             run_dir = case_dir / "retrieval"
             run_dir.mkdir(parents=True, exist_ok=True)
             _write_csv_rows(

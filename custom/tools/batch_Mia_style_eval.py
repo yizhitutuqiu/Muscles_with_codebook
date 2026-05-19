@@ -118,11 +118,12 @@ def main():
                     "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260510_000126/checkpoints/official_reproduction_cond_emgtopose_threed/model_100.pth"
                 },
                 "official_nocond": {
-                    "enabled": False,
-                    "checkpoint": ""
+                    "enabled": True,
+                    "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260510_000126/checkpoints/official_reproduction_cond_emgtopose_threed/model_100.pth"
                 },
                 "retrieval": {
-                    "enabled": False
+                    "enabled": True,
+                    "max_train_samples": None
                 }
             }
         else:
@@ -141,7 +142,8 @@ def main():
                     "checkpoint": "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260410_102342/checkpoints/generalization_new_nocond_clean_posetoemg/model_100.pth"
                 },
                 "retrieval": {
-                    "enabled": False
+                    "enabled": True,
+                    "max_train_samples": None
                 }
             }
         

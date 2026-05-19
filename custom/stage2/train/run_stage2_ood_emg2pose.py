@@ -172,7 +172,7 @@ def _make_eval_yaml(
             "stage2": {"enabled": True, "checkpoint": str(stage2_best)},
             "official_cond": {"enabled": False},
             "official_nocond": {"enabled": False},
-            "retrieval": {"enabled": False},
+            "retrieval": {"enabled": True, "max_train_samples": None},
         },
     }
     tmp = out_dir.parent / "temp_eval.yaml"
