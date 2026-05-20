@@ -29,6 +29,7 @@ class Stage2Pose2EMGConfig:
     task: str = "pose2emg"  # "pose2emg" or "emg2pose"
     token_count: int = 63
     dim: int = 256
+    disc_fusion: str = "single"  # single | concat | hierarchical
     # 连续分支：mixer=75 维→63 Token（原）；joint_25=25 关节各 3 维→25 Token（论文对齐，保留物理拓扑）
     cont_encoder_type: str = "mixer"
     cont_hidden_dim: int = 1024
@@ -67,7 +68,13 @@ class Stage2Pose2EMG(nn.Module):
     This module is self-contained and does NOT modify Stage I. Stage I model is injected and frozen.
     """
 
-    def __init__(self, cfg: Stage2Pose2EMGConfig, *, stage1: FrameCodebookModel):
+    def __init__(
+        self,
+        cfg: Stage2Pose2EMGConfig,
+        *,
+        stage1: FrameCodebookModel,
+        stage1_aux: Optional[FrameCodebookModel] = None,
+    ):
         super().__init__()
         self.cfg = cfg
         self.task = str(getattr(cfg, "task", "pose2emg")).strip().lower()
@@ -75,6 +82,11 @@ class Stage2Pose2EMG(nn.Module):
         for p in self.stage1.parameters():
             p.requires_grad_(False)
         self.stage1.eval()
+        self.stage1_aux = stage1_aux
+        if self.stage1_aux is not None:
+            for p in self.stage1_aux.parameters():
+                p.requires_grad_(False)
+            self.stage1_aux.eval()
 
         dim = int(cfg.dim)
         cont_type = str(cfg.cont_encoder_type).strip().lower()
@@ -173,12 +185,31 @@ class Stage2Pose2EMG(nn.Module):
         nn.init.normal_(self.disc_spatial_pe, std=0.02)
         nn.init.normal_(self.disc_temporal_pe, std=0.02)
 
-        self.fusion = build_fusion(
-            cfg.fusion_type,
-            dim,
-            dcsa_cfg=cfg.dcsa,
-            residual_add_cfg=cfg.fusion_residual_add,
-        )
+        disc_fusion = str(getattr(cfg, "disc_fusion", "single")).strip().lower()
+        self.disc_fusion = disc_fusion
+        if disc_fusion == "hierarchical":
+            self.fusion1 = build_fusion(
+                cfg.fusion_type,
+                dim,
+                dcsa_cfg=cfg.dcsa,
+                residual_add_cfg=cfg.fusion_residual_add,
+            )
+            self.fusion2 = build_fusion(
+                cfg.fusion_type,
+                dim,
+                dcsa_cfg=cfg.dcsa,
+                residual_add_cfg=cfg.fusion_residual_add,
+            )
+            self.fusion = None
+        else:
+            self.fusion = build_fusion(
+                cfg.fusion_type,
+                dim,
+                dcsa_cfg=cfg.dcsa,
+                residual_add_cfg=cfg.fusion_residual_add,
+            )
+            self.fusion1 = None
+            self.fusion2 = None
         self.temporal = build_temporal_backbone(
             cfg.temporal_type,
             dim=dim,
@@ -213,20 +244,22 @@ class Stage2Pose2EMG(nn.Module):
             zero_init_final_output(self.emg_head)
 
     @torch.no_grad()
-    def _stage1_discrete_tokens_bt(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    def _stage1_discrete_tokens_bt_for(
+        self, stage1: FrameCodebookModel, inputs: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # inputs can be joints3d (B,T,25,3) or emg (B,T,8) depending on task
         b, t = inputs.shape[0], inputs.shape[1]
         
         if self.task == "pose2emg":
             if inputs.ndim != 4 or inputs.shape[-2:] != (25, 3):
                 raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(inputs.shape)}")
-            mod = self.stage1.joints3d
+            mod = stage1.joints3d
             expected_frame_dim = 75
             x_flat = inputs.reshape(b * t, 75)
         else:
             if inputs.ndim != 3 or inputs.shape[-1] != 8:
                 raise ValueError(f"Expected emg (B,T,8), got {tuple(inputs.shape)}")
-            mod = self.stage1.emg
+            mod = stage1.emg
             expected_frame_dim = 8
             x_flat = inputs.reshape(b * t, 8)
 
@@ -236,7 +269,7 @@ class Stage2Pose2EMG(nn.Module):
         if stage1_code_dim != int(self.cfg.dim):
             raise ValueError(f"Stage1 code_dim={stage1_code_dim} != Stage2 dim={int(self.cfg.dim)}")
         
-        bypass_vq = bool(getattr(getattr(self.stage1, "cfg", None), "encoder_decoder_only", False))
+        bypass_vq = bool(getattr(getattr(stage1, "cfg", None), "encoder_decoder_only", False))
 
         # Case A: unified clip-level codebook
         if stage1_token_count == 1 and stage1_in_dim % expected_frame_dim == 0 and stage1_in_dim != expected_frame_dim:
@@ -257,17 +290,13 @@ class Stage2Pose2EMG(nn.Module):
                 idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
                 return z_q, idx_bt, z_q_base
             else:
-                z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * num_clips, stage1_code_dim))
+                z_q, idx, _, _, _ = stage1.vq(z_e.reshape(b * num_clips, stage1_code_dim))
                 z_q_base = z_q.view(b * num_clips, stage1_token_count * stage1_code_dim)
                 z_q = z_q.view(b, num_clips, 1, stage1_code_dim).repeat_interleave(int(clip_len), dim=1)
                 idx_bt = idx.view(b, num_clips, 1).repeat_interleave(int(clip_len), dim=1)
                 return z_q, idx_bt, z_q_base
 
         if stage1_in_dim == expected_frame_dim:
-            if stage1_token_count != int(self.cfg.token_count):
-                raise ValueError(
-                    f"Stage1 token_count={stage1_token_count} != Stage2 token_count={int(self.cfg.token_count)}"
-                )
             x_n = mod.normalize(x_flat.float(), update=False)
             z_e = mod.encoder(x_n).view(b * t, stage1_token_count, stage1_code_dim)
             if bypass_vq:
@@ -276,7 +305,7 @@ class Stage2Pose2EMG(nn.Module):
                 idx_bt = torch.zeros((b, t, stage1_token_count), dtype=torch.long, device=dev)
                 return z_q, idx_bt, None
             else:
-                z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * t * stage1_token_count, stage1_code_dim))
+                z_q, idx, _, _, _ = stage1.vq(z_e.reshape(b * t * stage1_token_count, stage1_code_dim))
                 z_q = z_q.view(b, t, stage1_token_count, stage1_code_dim)
                 idx_bt = idx.view(b, t, stage1_token_count)
                 return z_q, idx_bt, None
@@ -296,7 +325,7 @@ class Stage2Pose2EMG(nn.Module):
             z_q = z_e
             idx = torch.zeros((b, stage1_token_count), dtype=torch.long, device=dev)
         else:
-            z_q, idx, _, _, _ = self.stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
+            z_q, idx, _, _, _ = stage1.vq(z_e.reshape(b * stage1_token_count, stage1_code_dim))
             z_q = z_q.view(b, stage1_token_count, stage1_code_dim)
             idx = idx.view(b, stage1_token_count)
         
@@ -315,6 +344,21 @@ class Stage2Pose2EMG(nn.Module):
 
         z_q_clip_flat = z_q.reshape(b, stage1_token_count * stage1_code_dim)
         return z_q_bt, idx_bt, z_q_clip_flat
+
+    @torch.no_grad()
+    def _stage1_discrete_tokens_bt(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        if self.stage1_aux is None:
+            return self._stage1_discrete_tokens_bt_for(self.stage1, inputs)
+
+        disc_fusion = str(getattr(self.cfg, "disc_fusion", "single")).strip().lower()
+        if disc_fusion != "concat":
+            return self._stage1_discrete_tokens_bt_for(self.stage1, inputs)
+
+        z1, idx1, _ = self._stage1_discrete_tokens_bt_for(self.stage1_aux, inputs)
+        z5, idx5, _ = self._stage1_discrete_tokens_bt_for(self.stage1, inputs)
+        z = torch.cat([z1, z5], dim=2)
+        idx = torch.cat([idx1, idx5], dim=2)
+        return z, idx, None
 
     def forward(self, inputs: torch.Tensor, cond: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """
@@ -337,7 +381,13 @@ class Stage2Pose2EMG(nn.Module):
                 raise ValueError(f"Expected emg (B,T,8), got {tuple(inputs.shape)}")
             x_flat = inputs.reshape(b * t, 8)
 
-        z_disc_bt, idx_bt, z_disc_clip_flat = self._stage1_discrete_tokens_bt(inputs)
+        if self.stage1_aux is not None and str(getattr(self.cfg, "disc_fusion", "single")).strip().lower() == "hierarchical":
+            z_disc1_bt, idx1_bt, _ = self._stage1_discrete_tokens_bt_for(self.stage1_aux, inputs)
+            z_disc5_bt, idx5_bt, _ = self._stage1_discrete_tokens_bt_for(self.stage1, inputs)
+            idx_bt = torch.cat([idx1_bt, idx5_bt], dim=2)
+            z_disc_bt = None
+        else:
+            z_disc_bt, idx_bt, _ = self._stage1_discrete_tokens_bt(inputs)
 
         # Branch B: continuous tokens
         n_cont = self._cont_token_count
@@ -357,10 +407,16 @@ class Stage2Pose2EMG(nn.Module):
         if self.spatial_pe is not None and self.temporal_pe is not None:
             z_cont_bt = z_cont_bt + self.spatial_pe + self.temporal_pe[:, :t, :, :]
             
-        # H5: 为离散 Token 注入时空位置编码
-        z_disc_bt = z_disc_bt + self.disc_spatial_pe + self.disc_temporal_pe[:, :t, :, :]
-
-        z_fused = self.fusion(z_cont_bt, z_disc_bt)
+        if self.stage1_aux is not None and str(getattr(self.cfg, "disc_fusion", "single")).strip().lower() == "hierarchical":
+            z_disc1_bt = z_disc1_bt + self.disc_spatial_pe[:, :, 0:1, :] + self.disc_temporal_pe[:, :t, :, :]
+            z_disc5_bt = z_disc5_bt + self.disc_spatial_pe[:, :, 1:2, :] + self.disc_temporal_pe[:, :t, :, :]
+            z_fused1 = self.fusion1(z_cont_bt, z_disc1_bt)
+            z_fused = self.fusion2(z_fused1, z_disc5_bt)
+            guide_feat = torch.cat([z_disc1_bt, z_disc5_bt], dim=2).mean(dim=2)
+        else:
+            z_disc_bt = z_disc_bt + self.disc_spatial_pe + self.disc_temporal_pe[:, :t, :, :]
+            z_fused = self.fusion(z_cont_bt, z_disc_bt)
+            guide_feat = z_disc_bt.mean(dim=2) if z_disc_bt is not None else None
 
         if self.cond_proj is not None and cond is not None:
             cond = cond.view(b, 1)
@@ -368,8 +424,6 @@ class Stage2Pose2EMG(nn.Module):
             z_fused = z_fused + cond_feat
 
         # 融合后时序，可插拔：dstformer / tcn -> (B,T,N,C)
-        guide_feat = z_disc_bt.mean(dim=2) if z_disc_bt is not None else None
-        
         if hasattr(self.temporal, "forward"):
             import inspect
             sig = inspect.signature(self.temporal.forward)

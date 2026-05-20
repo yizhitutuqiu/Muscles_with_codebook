@@ -153,6 +153,8 @@ def _make_eval_yaml(
     split_dir: Path,
     target: str,
     stage2_best: Path,
+    stage1_checkpoint: Optional[str],
+    stage1_checkpoint_aux: Optional[str],
 ) -> Path:
     cfg: Dict[str, Any] = {
         "runtime": {"device": device, "num_workers": int(num_workers), "batch_size": int(batch_size)},
@@ -175,10 +177,32 @@ def _make_eval_yaml(
             "retrieval": {"enabled": True, "max_train_samples": None},
         },
     }
+    if stage1_checkpoint:
+        cfg["methods"]["stage2"]["stage1_checkpoint"] = stage1_checkpoint
+    if stage1_checkpoint_aux:
+        cfg["methods"]["stage2"]["stage1_checkpoint_aux"] = stage1_checkpoint_aux
     tmp = out_dir.parent / "temp_eval.yaml"
     with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
     return tmp
+
+
+def _extract_stage1_ckpt_from_stage2_best(stage2_best: Path) -> Optional[str]:
+    payload = _torch_load(stage2_best)
+    if isinstance(payload, dict):
+        v = payload.get("stage1_checkpoint", None)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
+def _extract_stage1_aux_ckpt_from_stage2_best(stage2_best: Path) -> Optional[str]:
+    payload = _torch_load(stage2_best)
+    if isinstance(payload, dict):
+        v = payload.get("stage1_checkpoint_aux", None)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
 
 
 def _run_stage2_train_with_step_tqdm(
@@ -369,6 +393,8 @@ def main() -> None:
 
         eval_out_dir = ckpt_dir / "eval_results"
         eval_out_dir.mkdir(parents=True, exist_ok=True)
+        stage1_checkpoint = _extract_stage1_ckpt_from_stage2_best(stage2_best)
+        stage1_checkpoint_aux = _extract_stage1_aux_ckpt_from_stage2_best(stage2_best)
         eval_yaml = _make_eval_yaml(
             out_dir=eval_out_dir,
             device="cuda:0",
@@ -377,6 +403,8 @@ def main() -> None:
             split_dir=split_dir,
             target=target,
             stage2_best=stage2_best,
+            stage1_checkpoint=stage1_checkpoint,
+            stage1_checkpoint_aux=stage1_checkpoint_aux,
         )
         try:
             subprocess.run([sys.executable, str(eval_script), "--config", str(eval_yaml)], check=True, env=env, cwd=str(mia_root))

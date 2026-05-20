@@ -1,5 +1,5 @@
 experiment:
-  name: exp_shared_head_h512_clip1_code128
+  name: exp_shared_head_h512_l3_clip1_code128
   seed: 702
 
 runtime:
@@ -37,7 +37,7 @@ optimizer:
 data:
   source: mia
   split: train
-  batch_size: 16
+  batch_size: 64
   step: 30
   pack:
     mode: clip
@@ -55,7 +55,7 @@ data:
     - joints3d.npy
 
 checkpoints:
-  dir: custom/checkpoints/new_clip1_codebook_with_exerciseloss/exp_shared_head_h512_clip1_code128
+  dir: custom/checkpoints/new_clip1_codebook_with_exerciseloss/exp_shared_head_h512_l3_clip1_code128
 
 model:
   encoder_decoder_only: false
@@ -94,7 +94,7 @@ model:
       temporal:
         frame_dim: 75
         kernel_size: 3
-        num_layers: 4
+        num_layers: 3
         dilation_base: 2
         dropout: 0.0
       std:
@@ -113,7 +113,7 @@ model:
       temporal:
         frame_dim: 8
         kernel_size: 3
-        num_layers: 4
+        num_layers: 3
         dilation_base: 2
         dropout: 0.0
       std:

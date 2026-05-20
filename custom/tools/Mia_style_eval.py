@@ -236,7 +236,11 @@ def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device, *, overrides:
 
 
 def _build_stage2_from_ckpt(
-    stage2_ckpt: Path, device: torch.device, *, stage1_override_ckpt: Optional[Path]
+    stage2_ckpt: Path,
+    device: torch.device,
+    *,
+    stage1_override_ckpt: Optional[Path],
+    stage1_aux_override_ckpt: Optional[Path],
 ) -> Tuple[Stage2Pose2EMG, Dict[str, Any], Path, FrameCodebookModel]:
     payload = torch.load(stage2_ckpt, map_location="cpu")
     if not isinstance(payload, dict) or "model_state" not in payload or "config" not in payload:
@@ -255,6 +259,22 @@ def _build_stage2_from_ckpt(
     methods = cfg.get("methods", {}) or {}
     stage1_overrides = (methods.get("stage1", {}) or {}) if isinstance(methods, dict) else {}
     stage1 = _build_stage1_from_ckpt(stage1_path, device=device, overrides=stage1_overrides)
+
+    stage1_aux = None
+    if stage1_aux_override_ckpt is not None:
+        stage1_aux_path = stage1_aux_override_ckpt
+    else:
+        stage1_aux_ckpt_str = str(payload.get("stage1_checkpoint_aux", cfg.get("stage1_aux", {}).get("checkpoint", "")))
+        stage1_aux_path = None
+        if stage1_aux_ckpt_str.strip():
+            mia_root = get_musclesinaction_repo_root()
+            stage1_aux_path = (
+                (mia_root / stage1_aux_ckpt_str).resolve()
+                if not Path(stage1_aux_ckpt_str).is_absolute()
+                else Path(stage1_aux_ckpt_str)
+            )
+    if stage1_aux_path is not None:
+        stage1_aux = _build_stage1_from_ckpt(stage1_aux_path, device=device, overrides=stage1_overrides)
 
     mcfg = cfg["model"]
     fusion_type = str(mcfg.get("fusion_type", "dcsa")).strip().lower()
@@ -275,6 +295,7 @@ def _build_stage2_from_ckpt(
         task=str(mcfg.get("task", "pose2emg")).strip().lower(),
         token_count=int(mcfg.get("token_count", 63)),
         dim=dim,
+        disc_fusion=str(mcfg.get("disc_fusion", "single")).strip().lower(),
         cont_encoder_type=str(mcfg.get("cont_encoder_type", "mixer")).strip().lower(),
         cont_hidden_dim=int(mcfg.get("cont_hidden_dim", 1024)),
         cont_joint_hidden_dim=int(mcfg.get("cont_joint_hidden_dim", 128)),
@@ -292,7 +313,7 @@ def _build_stage2_from_ckpt(
         max_seq_len=int(mcfg.get("max_seq_len", 256)),
         use_cond=bool(mcfg.get("use_cond", False)),
     )
-    model = Stage2Pose2EMG(stage2_cfg, stage1=stage1).to(device)
+    model = Stage2Pose2EMG(stage2_cfg, stage1=stage1, stage1_aux=stage1_aux).to(device)
     # The new clip-unified checkpoint might contain 'model.stage1.emg.temporal.pos_embed' weights 
     # but the stage1 config doesn't have it if it wasn't re-saved. Use strict=False to bypass.
     model.load_state_dict(payload["model_state"], strict=False)
@@ -796,8 +817,16 @@ def main() -> None:
         if stage1_override:
             p = Path(str(stage1_override)).expanduser()
             stage1_override_path = p if p.is_absolute() else (mia_root / p).resolve()
+        stage1_aux_override = m.get("stage1_checkpoint_aux", None)
+        stage1_aux_override_path = None
+        if stage1_aux_override:
+            p = Path(str(stage1_aux_override)).expanduser()
+            stage1_aux_override_path = p if p.is_absolute() else (mia_root / p).resolve()
         stage2_model, stage2_train_cfg, _, stage2_stage1 = _build_stage2_from_ckpt(
-            stage2_ckpt_path, device=device, stage1_override_ckpt=stage1_override_path
+            stage2_ckpt_path,
+            device=device,
+            stage1_override_ckpt=stage1_override_path,
+            stage1_aux_override_ckpt=stage1_aux_override_path,
         )
         task = str(stage2_train_cfg.get("model", {}).get("task", "pose2emg")).strip().lower()
 

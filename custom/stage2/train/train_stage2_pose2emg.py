@@ -249,6 +249,23 @@ def _build_stage1_from_ckpt(ckpt_path: Path, device: torch.device, methods_cfg: 
     return m
 
 
+def _maybe_build_stage1_aux_from_cfg(cfg: Dict[str, Any], *, device: torch.device) -> tuple[Optional[Path], Optional[FrameCodebookModel]]:
+    stage1_aux_cfg = cfg.get("stage1_aux", None)
+    if not isinstance(stage1_aux_cfg, dict):
+        return None, None
+    ckpt_val = stage1_aux_cfg.get("checkpoint", None)
+    if ckpt_val is None:
+        return None, None
+    ckpt_str = str(ckpt_val).strip()
+    if not ckpt_str:
+        return None, None
+    ckpt_path = Path(ckpt_str).expanduser().resolve()
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Stage1 aux checkpoint not found: {ckpt_path}")
+    m = _build_stage1_from_ckpt(ckpt_path, device=device, methods_cfg=cfg.get("methods", None))
+    return ckpt_path, m
+
+
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("", 0))
@@ -404,6 +421,10 @@ def _run_training(
     print(f"[Stage2Train] loading stage1 from {stage1_ckpt}")
     stage1 = _build_stage1_from_ckpt(stage1_ckpt, device=device, methods_cfg=cfg.get("methods", None))
 
+    stage1_aux_ckpt, stage1_aux = _maybe_build_stage1_aux_from_cfg(cfg, device=device)
+    if stage1_aux_ckpt is not None:
+        print(f"[Stage2Train] loading stage1_aux from {stage1_aux_ckpt}")
+
     model_cfg = cfg["model"]
     task = str(model_cfg.get("task", "pose2emg")).strip().lower()
     from custom.stage2.models.dcsa import DCSAConfig
@@ -439,6 +460,7 @@ def _run_training(
         task=task,
         token_count=int(model_cfg.get("token_count", 63)),
         dim=int(model_cfg.get("dim", 256)),
+        disc_fusion=str(model_cfg.get("disc_fusion", "single")).strip().lower(),
         cont_encoder_type=str(model_cfg.get("cont_encoder_type", "mixer")).strip().lower(),
         cont_hidden_dim=int(model_cfg.get("cont_hidden_dim", 1024)),
         cont_joint_hidden_dim=int(model_cfg.get("cont_joint_hidden_dim", 128)),
@@ -461,7 +483,7 @@ def _run_training(
         use_cond=bool(model_cfg.get("use_cond", False)),
     )
 
-    model = Stage2Pose2EMG(stage2_cfg, stage1=stage1).to(device)
+    model = Stage2Pose2EMG(stage2_cfg, stage1=stage1, stage1_aux=stage1_aux).to(device)
     if distributed:
         model = DDP(model, device_ids=[int(device.index)], output_device=int(device.index), broadcast_buffers=False)
 
@@ -712,6 +734,7 @@ def _run_training(
                             "best_val_rmse": float(best_val_rmse),
                             "config": cfg,
                             "stage1_checkpoint": str(stage1_ckpt),
+                            "stage1_checkpoint_aux": str(stage1_aux_ckpt) if stage1_aux_ckpt is not None else "",
                             "model_state": model_ref.state_dict(),
                             "optim_state": optim.state_dict(),
                         }
@@ -728,6 +751,7 @@ def _run_training(
                     "best_val_rmse": float(best_val_rmse),
                     "config": cfg,
                     "stage1_checkpoint": str(stage1_ckpt),
+                    "stage1_checkpoint_aux": str(stage1_aux_ckpt) if stage1_aux_ckpt is not None else "",
                     "model_state": model_ref.state_dict(),
                     "optim_state": optim.state_dict(),
                 }
@@ -801,6 +825,12 @@ def main() -> None:
         help="Override stage1 checkpoint path (otherwise use config stage1.checkpoint).",
     )
     parser.add_argument(
+        "--stage1_checkpoint_aux",
+        type=str,
+        default=None,
+        help="Optional second stage1 checkpoint (e.g., clip1). If set, overrides config stage1_aux.checkpoint.",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default=None,
@@ -846,6 +876,8 @@ def main() -> None:
     cfg = _load_yaml(Path(args.config).expanduser().resolve())
     if args.stage1_checkpoint is not None:
         cfg.setdefault("stage1", {})["checkpoint"] = args.stage1_checkpoint
+    if args.stage1_checkpoint_aux is not None:
+        cfg.setdefault("stage1_aux", {})["checkpoint"] = args.stage1_checkpoint_aux
     if args.train_filelist is not None:
         cfg.setdefault("data", {})["train_filelist"] = args.train_filelist
     if args.val_filelist is not None:
