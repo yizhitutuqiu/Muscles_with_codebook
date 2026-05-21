@@ -1,6 +1,6 @@
 experiment:
-  name: stage2_clip5_official_transformer_pose2emg_stage1_h512_l3_code126
-  seed: 720
+  name: stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code126
+  seed: 730
 
 runtime:
   device: cuda
@@ -12,7 +12,7 @@ runtime:
   grad_clip_norm: 1.0
   distributed:
     enabled: false
-    gpus: [1]
+    gpus: [0]
     backend: nccl
 
 optimizer:
@@ -43,7 +43,7 @@ stage1:
   checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3_code126/best.pt
 
 checkpoints:
-  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/fusecode_128/stage2_clip5_official_transformer_pose2emg_stage1_h512_l3_code126
+  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/conv2d_in_dcsa/stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code126
 
 model:
   task: "pose2emg"
@@ -60,7 +60,7 @@ model:
     num_heads: 7
     dropout: 0.2
 
-  temporal_type: mia_official_transformer
+  temporal_type: mia_official_transformer_conv_dcsa
 
   emg_head_type: identity
   emg_pred_mode: full

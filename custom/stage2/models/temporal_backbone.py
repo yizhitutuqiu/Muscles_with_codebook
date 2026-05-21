@@ -15,6 +15,7 @@ import torch
 import torch.nn as nn
 import math
 
+from .dcsa import DCSAConfig, SymmetricDCSA
 from .dstformer import DSTFormer, DSTFormerConfig
 from .dstformer_v2 import DSTFormerV2, DSTFormerV2Config
 from .dstformer_v3_moe import DSTFormerV3MoE, DSTFormerV3MoEConfig
@@ -271,6 +272,122 @@ class MiaOfficialLightTransformerTemporal(nn.Module):
         return out0.permute(0, 2, 1)
 
 
+class MiaOfficialLightTransformerConvDCSATemporal(nn.Module):
+    produces_pred: bool = True
+    expects_disc_tokens: bool = True
+
+    def __init__(self, *, task: str, dcsa_cfg: DCSAConfig):
+        super().__init__()
+        self.task = str(task).strip().lower()
+        self.dcsa = SymmetricDCSA(dcsa_cfg)
+        self._conv_dim = 126
+        d_model = int(dcsa_cfg.dim)
+        if d_model != int(self._conv_dim):
+            self.to_dcsa = nn.Linear(int(self._conv_dim), d_model)
+            self.from_dcsa = nn.Linear(d_model, int(self._conv_dim))
+        else:
+            self.to_dcsa = nn.Identity()
+            self.from_dcsa = nn.Identity()
+        if self.task == "pose2emg":
+            from musclesinaction.models import modelposetoemg as _transmodel
+
+            self.net = _transmodel.TransformerEnc(
+                threed="True",
+                num_tokens=50,
+                dim_model=128,
+                num_classes=20,
+                num_heads=16,
+                classif=False,
+                num_encoder_layers=8,
+                num_decoder_layers=3,
+                dropout_p=0.1,
+                device="cuda",
+                embedding=True,
+                step=30,
+            )
+            self._expected_in = "joints3d"
+            self._out_dim = 8
+        elif self.task == "emg2pose":
+            from musclesinaction.models import modelemgtopose as _transmodel
+
+            self.net = _transmodel.TransformerEnc(
+                threed="True",
+                num_tokens=50,
+                dim_model=128,
+                num_classes=20,
+                num_heads=16,
+                classif=False,
+                num_encoder_layers=8,
+                num_decoder_layers=3,
+                dropout_p=0.1,
+                device="cuda",
+                embedding=True,
+                step=30,
+            )
+            self._expected_in = "emg"
+            self._out_dim = 75
+        else:
+            raise ValueError(f"Unknown task={task!r} for MiaOfficialLightTransformerConvDCSATemporal")
+
+        self._expected_param_count = sum(p.numel() for p in self.net.parameters())
+
+    def forward(self, x: torch.Tensor, *, raw_inputs: torch.Tensor, cond: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if raw_inputs.ndim not in (3, 4):
+            raise ValueError(f"raw_inputs must be (B,T,8) or (B,T,25,3), got {tuple(raw_inputs.shape)}")
+        b, t = int(raw_inputs.shape[0]), int(raw_inputs.shape[1])
+        if t != 30:
+            raise ValueError(f"Official transformer expects T=30 (step=30), got T={t}")
+
+        if cond is None:
+            condval = torch.zeros((b,), device=raw_inputs.device, dtype=torch.float32)
+        else:
+            condval = cond.reshape(b).to(device=raw_inputs.device, dtype=torch.float32)
+
+        if x.ndim != 4:
+            raise ValueError(f"Expected discrete tokens x as (B,T,N,C), got {tuple(x.shape)}")
+
+        if self._expected_in == "joints3d":
+            if raw_inputs.ndim != 4 or raw_inputs.shape[-2:] != (25, 3):
+                raise ValueError(f"Expected joints3d (B,T,25,3), got {tuple(raw_inputs.shape)}")
+            src = raw_inputs.reshape(b, t, 75)
+            src = src.float() * math.sqrt(self.net.dim_model)
+            src = torch.unsqueeze(src, dim=1).permute(0, 1, 3, 2)
+            srcorig = self.net.conv1(src)[:, :, 0, :].permute(0, 2, 1)
+            z_cont = self.to_dcsa(srcorig).unsqueeze(2)
+            z_fused = self.dcsa(z_cont, x)
+            src_fused = self.from_dcsa(z_fused[:, :, : z_cont.shape[2], :].mean(dim=2))
+            src = self.net.positional_encoder(src_fused)
+            condition = torch.ones(src.shape[0], src.shape[1], 2, device=src.device, dtype=src.dtype) * condval.reshape(
+                condval.shape[0], 1, 1
+            ).to(device=src.device, dtype=src.dtype)
+            srccat = torch.cat([src, condition], dim=2)
+            src = srccat.permute(1, 0, 2)
+            transformer_out = self.net.transformer0(src, src_key_padding_mask=None)
+            out0 = self.net.out0(transformer_out)
+            out0 = out0.permute(1, 2, 0)
+            return out0.permute(0, 2, 1)
+
+        if raw_inputs.ndim != 3 or raw_inputs.shape[-1] != 8:
+            raise ValueError(f"Expected emg (B,T,8), got {tuple(raw_inputs.shape)}")
+        src = raw_inputs.permute(0, 2, 1)
+        src = src.float() * math.sqrt(self.net.dim_model)
+        src = torch.unsqueeze(src, dim=1).permute(0, 1, 2, 3)
+        src = self.net.conv1(src)[:, :, 0, :].permute(0, 2, 1)
+        z_cont = self.to_dcsa(src).unsqueeze(2)
+        z_fused = self.dcsa(z_cont, x)
+        src_fused = self.from_dcsa(z_fused[:, :, : z_cont.shape[2], :].mean(dim=2))
+        src = self.net.positional_encoder(src_fused)
+        condition = torch.ones(src.shape[0], src.shape[1], 2, device=src.device, dtype=src.dtype) * condval.reshape(
+            condval.shape[0], 1, 1
+        ).to(device=src.device, dtype=src.dtype)
+        srccat = torch.cat([src, condition], dim=2)
+        src = srccat.permute(1, 0, 2)
+        transformer_out = self.net.transformer0(src, src_key_padding_mask=None)
+        out0 = self.net.out0(transformer_out)
+        out0 = out0.permute(1, 2, 0)
+        return out0.permute(0, 2, 1)
+
+
 def build_temporal_backbone(
     temporal_type: str,
     dim: int,
@@ -282,6 +399,7 @@ def build_temporal_backbone(
     dst_v4_dual_moe: Optional[DSTFormerV4DualMoEConfig] = None,
     dst_v5_guided_moe: Optional[DSTFormerV5GuidedMoEConfig] = None,
     tcn_cfg: Optional[TCNBackboneConfig] = None,
+    dcsa_cfg: Optional[DCSAConfig] = None,
     **kwargs: Any,
 ) -> nn.Module:
     """
@@ -342,6 +460,11 @@ def build_temporal_backbone(
         if task is None:
             raise ValueError("temporal_type=official requires task to be provided")
         return MiaOfficialLightTransformerTemporal(task=task)
+    if temporal_type in ("mia_official_transformer_conv_dcsa", "mia_official_conv_dcsa", "official_conv_dcsa"):
+        if task is None:
+            raise ValueError("temporal_type=official_conv_dcsa requires task to be provided")
+        cfg = dcsa_cfg or DCSAConfig(dim=dim)
+        return MiaOfficialLightTransformerConvDCSATemporal(task=task, dcsa_cfg=cfg)
     if temporal_type == "tcn":
         cfg = tcn_cfg or TCNBackboneConfig(dim=dim, **{k: v for k, v in kwargs.items() if k in ("hidden_dim", "kernel_size", "num_layers", "dilation_base", "dropout")})
         return TCNTemporalBackbone(cfg)

@@ -220,6 +220,7 @@ class Stage2Pose2EMG(nn.Module):
             dst_v4_dual_moe=cfg.dst_v4_dual_moe,
             dst_v5_guided_moe=cfg.dst_v5_guided_moe,
             tcn_cfg=cfg.tcn,
+            dcsa_cfg=cfg.dcsa,
         )
 
         if getattr(cfg, "use_cond", False):
@@ -388,6 +389,34 @@ class Stage2Pose2EMG(nn.Module):
             z_disc_bt = None
         else:
             z_disc_bt, idx_bt, _ = self._stage1_discrete_tokens_bt(inputs)
+
+        if bool(getattr(self.temporal, "expects_disc_tokens", False)):
+            if z_disc_bt is None:
+                raise ValueError("temporal expects discrete tokens but got z_disc_bt=None")
+            z_disc_bt = z_disc_bt + self.disc_spatial_pe + self.disc_temporal_pe[:, :t, :, :]
+            import inspect
+            sig = inspect.signature(self.temporal.forward)
+            kwargs = {}
+            if "raw_inputs" in sig.parameters:
+                kwargs["raw_inputs"] = inputs
+            if "cond" in sig.parameters:
+                kwargs["cond"] = cond
+            z_out = self.temporal(z_disc_bt, **kwargs)
+            if bool(getattr(self.temporal, "produces_pred", False)):
+                net_out = z_out
+            else:
+                net_out = self.emg_head(z_out)
+            pred_mode = str(self.cfg.emg_pred_mode).strip().lower()
+            if pred_mode == "residual":
+                raise NotImplementedError("residual mode is not fully adapted for emg2pose yet.")
+            else:
+                pred = net_out
+            if self.task == "emg2pose":
+                pred = pred.view(b, t, 25, 3)
+            return {
+                "pred": pred,
+                "idx_j3d": idx_bt,
+            }
 
         # Branch B: continuous tokens
         n_cont = self._cont_token_count

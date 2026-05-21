@@ -1,6 +1,6 @@
 experiment:
-  name: stage2_clip5_official_transformer_pose2emg_stage1_h512_l3_code126
-  seed: 720
+  name: stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code256
+  seed: 740
 
 runtime:
   device: cuda
@@ -12,7 +12,7 @@ runtime:
   grad_clip_norm: 1.0
   distributed:
     enabled: false
-    gpus: [1]
+    gpus: [0]
     backend: nccl
 
 optimizer:
@@ -40,27 +40,27 @@ data:
     - joints3d.npy
 
 stage1:
-  checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3_code126/best.pt
+  checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3_new/best.pt
 
 checkpoints:
-  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/fusecode_128/stage2_clip5_official_transformer_pose2emg_stage1_h512_l3_code126
+  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/conv2d_in_dcsa_code256/stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code256
 
 model:
   task: "pose2emg"
   use_cond: false
   token_count: 1
-  dim: 126
+  dim: 256
   cont_encoder_type: joint_25
   cont_hidden_dim: 1024
   cont_joint_hidden_dim: 128
 
   fusion_type: symmetric_dcsa
   dcsa:
-    dim: 126
-    num_heads: 7
+    dim: 256
+    num_heads: 8
     dropout: 0.2
 
-  temporal_type: mia_official_transformer
+  temporal_type: mia_official_transformer_conv_dcsa
 
   emg_head_type: identity
   emg_pred_mode: full
