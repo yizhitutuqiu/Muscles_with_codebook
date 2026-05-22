@@ -1,6 +1,6 @@
 experiment:
-  name: stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code256
-  seed: 740
+  name: stage2_clip5_official_transformer_mlp_bias_pose2emg_stage1_h512_l3
+  seed: 760
 
 runtime:
   device: cuda
@@ -40,10 +40,10 @@ data:
     - joints3d.npy
 
 stage1:
-  checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3_new/best.pt
+  checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3/best.pt
 
 checkpoints:
-  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/conv2d_in_dcsa_code256/stage2_clip5_official_transformer_conv_dcsa_pose2emg_stage1_h512_l3_code256
+  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/mlp_to_officialtoken/stage2_clip5_official_transformer_mlp_bias_pose2emg_stage1_h512_l3
 
 model:
   task: "pose2emg"
@@ -60,8 +60,9 @@ model:
     num_heads: 8
     dropout: 0.2
 
-  temporal_type: mia_official_transformer_conv_dcsa
+  temporal_type: mia_official_transformer_mlp_bias
 
   emg_head_type: identity
   emg_pred_mode: full
   max_seq_len: 256
+

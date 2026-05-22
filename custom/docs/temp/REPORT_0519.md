@@ -25,19 +25,11 @@ Stage1 在 Stage2 推理时只用于 **生成离散 token**：
 
 ## 总结表（Average + Params）
 
-### pose2emg（RMSE，越低越好）
-
 | | 0518：Stage1=exp_shared_head | 0519：Stage1=exp_shared_head_h512_l3 | PureContinuous（DSTFormer+MoE，无离散先验） | Official(cond) | Official(nocond) |
 |---|---:|---:|---:|---:|---:|
-| Average RMSE | 10.41 | 10.37 | 10.25 | 10.55 | 10.77 |
-| Params（推理口径） | 19.32M（Stage1=12.94M + Stage2=6.39M） | 8.92M（Stage1=2.53M + Stage2=6.39M） | 109.36M（Stage2 only） | 5.42M | 5.42M |
-
-### emg2pose（MPJPE，越低越好）
-
-| | 0518：Stage1=exp_shared_head | 0519：Stage1=exp_shared_head_h512_l3 | PureContinuous（DSTFormer+MoE，无离散先验） | Official(cond) | Official(nocond) |
-|---|---:|---:|---:|---:|---:|
-| Average MPJPE | 0.054 | 0.055 | 0.048 | 0.090 | 0.090 |
-| Params（推理口径） | 19.18M（Stage1=12.87M + Stage2=6.32M） | 8.81M（Stage1=2.50M + Stage2=6.32M） | 108.25M（Stage2 only） | 5.36M | 5.36M |
+| pose2emg Average RMSE | 10.41 | 10.37 | 10.25 | 10.55 | 10.77 |
+| emg2pose Average MPJPE | 0.054 | 0.055 | 0.048 | 0.090 | 0.090 |
+| Params（推理口径，pose2emg/emg2pose） | 19.32M/19.18M | 8.92M/8.81M | 109.36M/108.25M | 5.42M/5.36M | 5.42M/5.36M |
 
 说明：
 - emg2pose 的 Official(nocond) 本质是“同一 cond 权重 + dataloader cond=False”的评测口径；该模型对 cond 的敏感度非常弱，3 位小数下 cond/nocond 会显示为相同数值。
@@ -50,3 +42,21 @@ Stage1 在 Stage2 推理时只用于 **生成离散 token**：
 - **pose2emg**：Stage1 轻量化后，Average RMSE 从 10.41 → **10.37**（小幅提升），同时推理参数量从 19.32M → **8.92M**（约 54% 减少）。
 - **emg2pose**：Stage1 轻量化后，Average MPJPE 从 0.054 → 0.055（几乎不变的量级），但推理参数量从 19.18M → **8.81M**（约 54% 减少）。
 - 结论：在 **Stage2 主干固定为官方轻量 Transformer** 的条件下，Stage1 显著轻量化依然能保持（甚至略提升）泛化指标，且带来明显的推理参数规模收益；相比超大纯连续 MoE 模型，我们在参数效率上更有优势。
+
+---
+
+## 0521 — 最新实验补充（Conv2D-in-DCSA & 双粒度离散先验）
+
+本节对比 3 类最新结果：
+
+- 基线：Stage2 主干为官方轻量 TransformerEnc，离散先验以 bias 形式注入 conv2d 输出（lightweight_stage1_stage2）
+- Conv2D-in-DCSA：将 conv2d 输出视作连续 token，与离散 token 直接做双向 cross-attn（symmetric DCSA），再进入官方 TransformerEnc（conv2d_in_dcsa）
+- 双粒度离散先验：clip5 + clip1 两套离散 token 融合（clip5_clip1_doublefusion），比较两种策略
+  - Solution A（Concat）：两套离散 token 在 token 维拼接后走现有 DCSA
+  - Solution B（Hierarchical）：先融合 clip1 再融合 clip5 的层级融合
+
+| | Baseline（official transformer + bias injection） | Conv2D-in-DCSA（clip5，code126） | DoubleFusion — Solution A Concat（clip1+clip5） | DoubleFusion — Solution B Hierarchical（clip1→clip5） | Official(cond) | Official(nocond) |
+|---|---:|---:|---:|---:|---:|---:|
+| pose2emg Average RMSE | 10.37 | 10.83 | 10.88 | 11.01 | 10.55 | 10.77 |
+| emg2pose Average MPJPE | 0.055 | 0.051 | 0.066 | 0.068 | 0.090 | 0.090 |
+| Params（推理口径，pose2emg/emg2pose） | 8.92M/8.81M | 8.37M/8.26M | 11.46M/11.32M | 12.25M/12.11M | 5.42M/5.36M | 5.42M/5.36M |

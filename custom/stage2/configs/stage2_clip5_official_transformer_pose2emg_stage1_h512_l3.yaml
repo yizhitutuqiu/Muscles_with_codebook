@@ -43,7 +43,7 @@ stage1:
   checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3/best.pt
 
 checkpoints:
-  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/stage2_clip5_official_transformer_pose2emg_stage1_h512_l3
+  dir: custom/stage2/checkpoints/lightweight_stage1_stage2/raw/stage2_clip5_official_transformer_pose2emg_stage1_h512_l3
 
 model:
   task: "pose2emg"

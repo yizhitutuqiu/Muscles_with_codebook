@@ -24,7 +24,7 @@ optimizer:
 
 data:
   split: train
-  batch_size: 16
+  batch_size: 64
   step: 30
   joints3d_root_center: true
   joints3d_root_index: 8
