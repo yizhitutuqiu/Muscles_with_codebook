@@ -266,6 +266,12 @@ def main() -> None:
     )
     parser.add_argument("--max_steps", type=int, default=16000)
     parser.add_argument(
+        "--train_batch_size",
+        type=int,
+        default=None,
+        help="Override data.batch_size for Stage2 training (passed to train_stage2_pose2emg.py --batch_size).",
+    )
+    parser.add_argument(
         "--eval_only",
         action="store_true",
         help="If set, skip training and only evaluate existing per-target checkpoints under an existing run dir.",
@@ -312,6 +318,8 @@ def main() -> None:
         base_cfg = _extract_cfg(payload)
         base_cfg = _ensure_single_gpu_cfg(base_cfg)
         base_cfg.setdefault("runtime", {})["max_steps"] = int(args.max_steps)
+        if args.train_batch_size is not None:
+            base_cfg.setdefault("data", {})["batch_size"] = int(args.train_batch_size)
         out_root = out_root_parent / f"emg2pose_ood_h8_{stamp}"
         out_root.mkdir(parents=True, exist_ok=True)
         cfg_path = out_root / "base_stage2_config.yaml"
@@ -381,6 +389,8 @@ def main() -> None:
                 "--max_steps",
                 str(int(args.max_steps)),
             ]
+            if args.train_batch_size is not None:
+                cmd.extend(["--batch_size", str(int(args.train_batch_size))])
             _run_stage2_train_with_step_tqdm(
                 cmd=cmd,
                 env=env,
