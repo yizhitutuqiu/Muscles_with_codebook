@@ -1,0 +1,12 @@
+subject,official_cond,official_nocond,checkpoint
+Subject8,14.152000,14.658000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject8_posetoemg/model_100.pth
+Subject5,15.592000,15.959000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject5_posetoemg/model_100.pth
+Subject7,16.684000,16.717000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject7_posetoemg/model_100.pth
+Subject4,17.006000,16.274000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject4_posetoemg/model_100.pth
+Subject2,17.223000,14.876000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject2_posetoemg/model_100.pth
+Subject9,17.479000,17.479000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject9_posetoemg/model_100.pth
+Subject3,17.649000,17.905000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject3_posetoemg/model_100.pth
+Subject6,18.049000,17.876000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject6_posetoemg/model_100.pth
+Subject1,23.508000,23.721000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject1_posetoemg/model_100.pth
+Subject0,27.356000,26.147000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/posetoemg_ood_person_20260522_144743/checkpoints/official_ood_person_Subject0_posetoemg/model_100.pth
+Average,18.469800,18.161200,

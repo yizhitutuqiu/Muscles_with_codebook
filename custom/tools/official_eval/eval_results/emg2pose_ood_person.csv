@@ -1,0 +1,12 @@
+subject,official_cond_mpjpe,official_nocond_mpjpe,checkpoint
+Subject0,0.096000,0.096000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject0_emgtopose/model_100.pth
+Subject2,0.100000,0.100000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject2_emgtopose/model_100.pth
+Subject5,0.100000,0.100000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject5_emgtopose/model_100.pth
+Subject4,0.102000,0.102000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject4_emgtopose/model_100.pth
+Subject3,0.108000,0.108000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject3_emgtopose/model_100.pth
+Subject6,0.109000,0.109000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject6_emgtopose/model_100.pth
+Subject7,0.109000,0.109000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject7_emgtopose/model_100.pth
+Subject9,0.112000,0.112000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject9_emgtopose/model_100.pth
+Subject1,0.114000,0.114000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject1_emgtopose/model_100.pth
+Subject8,0.115000,0.115000,/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/ood/emgtopose_ood_person_20260522_144754/checkpoints/official_ood_person_Subject8_emgtopose/model_100.pth
+Average,0.106500,0.106500,

@@ -30,6 +30,16 @@ def _torch_load(path: Path) -> Any:
         return torch.load(str(path), map_location="cpu")
 
 
+def _extract_cfg(payload: Any) -> Dict[str, Any]:
+    if isinstance(payload, dict):
+        cfg = payload.get("config", None) or payload.get("cfg", None)
+        if isinstance(cfg, dict):
+            return cfg
+        if isinstance(cfg, str):
+            return yaml.safe_load(cfg) or {}
+    raise ValueError("Cannot find config dict in checkpoint payload.")
+
+
 def _ensure_single_gpu_cfg(cfg: Dict[str, Any]) -> Dict[str, Any]:
     runtime = cfg.setdefault("runtime", {}) or {}
     if not isinstance(runtime, dict):
@@ -52,17 +62,41 @@ def _latest_run_dir(parent: Path, prefix: str) -> Optional[Path]:
     return cands[-1] if cands else None
 
 
+def _append_log(log_file: Path, msg: str) -> None:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(msg.rstrip() + "\n")
+
+
 def _parse_stage2_average(summary_processed_csv: Path) -> float:
-    if not summary_processed_csv.exists():
-        raise FileNotFoundError(f"summary_processed.csv not found: {summary_processed_csv}")
-    with open(summary_processed_csv, "r", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    for r in rows:
-        if str(r.get("exercise", "")).strip().lower() == "average":
-            v = str(r.get("stage2", "")).strip()
-            if v:
-                return float(v)
-            break
+    if summary_processed_csv.exists():
+        with open(summary_processed_csv, "r", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        for r in rows:
+            if str(r.get("exercise", "")).strip().lower() == "average":
+                v = str(r.get("stage2", "")).strip()
+                if v:
+                    return float(v)
+                break
+
+    summary_csv = summary_processed_csv.parent / "summary.csv"
+    if summary_csv.exists():
+        with open(summary_csv, "r", encoding="utf-8") as f:
+            rows2 = list(csv.DictReader(f))
+        vals = []
+        for r in rows2:
+            if str(r.get("method", "")).strip() != "stage2":
+                continue
+            s = str(r.get("official_global_rmse", "")).strip()
+            if not s:
+                continue
+            try:
+                vals.append(float(s))
+            except Exception:
+                continue
+        if vals:
+            return float(sum(vals) / len(vals))
+
     raise RuntimeError(f"Cannot parse stage2 average from: {summary_processed_csv}")
 
 
@@ -213,6 +247,12 @@ def _subject_id_from_val_file(p: Path) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--base_dir",
+        type=str,
+        default="",
+        help="If set, load base config from <base_dir>/best.pt instead of --base_cfg yaml.",
+    )
+    parser.add_argument(
         "--base_cfg",
         type=str,
         default="/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/lightweight_stage1_stage2/ood/pose2emg_ood_h8_8exp_20260521_165758/base_stage2_config.yaml",
@@ -239,9 +279,16 @@ def main() -> None:
     args = parser.parse_args()
 
     mia_root = _mia_root()
-    base_cfg_path = Path(args.base_cfg).expanduser().resolve()
-    if not base_cfg_path.exists():
-        raise FileNotFoundError(f"base_cfg not found: {base_cfg_path}")
+    base_cfg_path: Optional[Path] = None
+    base_dir = Path(str(args.base_dir)).expanduser().resolve() if str(args.base_dir).strip() else None
+    if base_dir is not None:
+        base_best = base_dir / "best.pt"
+        if not base_best.exists():
+            raise FileNotFoundError(f"best.pt not found under base_dir: {base_best}")
+    else:
+        base_cfg_path = Path(args.base_cfg).expanduser().resolve()
+        if not base_cfg_path.exists():
+            raise FileNotFoundError(f"base_cfg not found: {base_cfg_path}")
 
     split_dir = Path(args.split_dir).expanduser().resolve()
     if not split_dir.exists():
@@ -253,12 +300,12 @@ def main() -> None:
     only = [x.strip() for x in str(args.only).split(",") if x.strip()]
     only_set = {f"Subject{int(x)}" for x in only} if only else set()
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_root_parent = Path(args.out_root).expanduser().resolve()
     out_root_parent.mkdir(parents=True, exist_ok=True)
+    run_dir_arg = str(args.run_dir).strip()
     if args.eval_only:
-        if str(args.run_dir).strip():
-            out_root = Path(str(args.run_dir)).expanduser().resolve()
+        if run_dir_arg:
+            out_root = Path(run_dir_arg).expanduser().resolve()
         else:
             out_root = _latest_run_dir(out_root_parent, "pose2emg_ood_person_") or out_root_parent
         if not (out_root / "checkpoints").exists():
@@ -272,34 +319,51 @@ def main() -> None:
             subjects = [s for s in subjects if s in only_set]
         if not subjects:
             raise RuntimeError("No subjects found to run.")
-        base_cfg = yaml.safe_load(base_cfg_path.read_text(encoding="utf-8")) or {}
-        if not isinstance(base_cfg, dict):
-            raise ValueError(f"Invalid base cfg: {base_cfg_path}")
+        if base_dir is not None:
+            payload = _torch_load(base_best)
+            base_cfg = _extract_cfg(payload)
+        else:
+            assert base_cfg_path is not None
+            base_cfg = yaml.safe_load(base_cfg_path.read_text(encoding="utf-8")) or {}
+            if not isinstance(base_cfg, dict):
+                raise ValueError(f"Invalid base cfg: {base_cfg_path}")
         base_cfg = _ensure_single_gpu_cfg(base_cfg)
         base_cfg.setdefault("runtime", {})["max_steps"] = int(args.max_steps)
         if args.train_batch_size is not None:
             base_cfg.setdefault("data", {})["batch_size"] = int(args.train_batch_size)
-        out_root = out_root_parent / f"pose2emg_ood_person_{stamp}"
+        base_cfg.setdefault("model", {})
+        if not base_cfg["model"].get("task"):
+            base_cfg["model"]["task"] = "pose2emg"
+        if run_dir_arg:
+            out_root = Path(run_dir_arg).expanduser().resolve()
+        else:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_root = out_root_parent / f"pose2emg_ood_person_{stamp}"
         out_root.mkdir(parents=True, exist_ok=True)
         cfg_path = out_root / "base_stage2_config.yaml"
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(base_cfg, f, sort_keys=False)
         splits_root = out_root / "splits"
         splits_root.mkdir(parents=True, exist_ok=True)
+        if not cfg_path.exists():
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(base_cfg, f, sort_keys=False)
 
         base_lines = [ln.strip() for ln in base_train_list.read_text(encoding="utf-8", errors="ignore").splitlines() if ln.strip()]
         for s in subjects:
-            keep = [ln for ln in base_lines if f"/{s}/" not in ln]
-            if not keep:
-                raise RuntimeError(f"Filtered train list is empty for held-out {s}.")
-            (splits_root / f"train_wo_{s}.txt").write_text("\n".join(keep) + "\n", encoding="utf-8")
-            val_src = split_dir / f"val{s}.txt"
-            if not val_src.exists():
-                m = re.match(r"Subject(\d+)$", s)
-                if not m:
-                    raise FileNotFoundError(f"val file missing for {s}")
-                val_src = split_dir / f"valSubject{int(m.group(1))}.txt"
-            (splits_root / f"val_{s}.txt").write_text(val_src.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
+            train_out = splits_root / f"train_wo_{s}.txt"
+            val_out = splits_root / f"val_{s}.txt"
+            if not train_out.exists():
+                keep = [ln for ln in base_lines if f"/{s}/" not in ln]
+                if not keep:
+                    raise RuntimeError(f"Filtered train list is empty for held-out {s}.")
+                train_out.write_text("\n".join(keep) + "\n", encoding="utf-8")
+            if not val_out.exists():
+                val_src = split_dir / f"val{s}.txt"
+                if not val_src.exists():
+                    m = re.match(r"Subject(\d+)$", s)
+                    if not m:
+                        raise FileNotFoundError(f"val file missing for {s}")
+                    val_src = split_dir / f"valSubject{int(m.group(1))}.txt"
+                val_out.write_text(val_src.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8")
 
     env = dict(os.environ)
     env["CUDA_VISIBLE_DEVICES"] = str(args.cuda)
@@ -331,76 +395,99 @@ def main() -> None:
             subjects = [s for s in subjects if s in only_set]
 
     rows: List[Dict[str, Any]] = []
+    run_log = out_root / "runner.log"
     for s in subjects:
-        ckpt_dir = (out_root / "checkpoints" / s).resolve()
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-        stage2_best = ckpt_dir / "best.pt"
-        train_file = splits_root / f"train_wo_{s}.txt"
-        val_file = splits_root / f"val_{s}.txt"
-        if not train_file.exists():
-            raise FileNotFoundError(f"Missing train file: {train_file}")
-        if not val_file.exists():
-            raise FileNotFoundError(f"Missing val file: {val_file}")
-
-        if not args.eval_only:
-            cmd = [
-                sys.executable,
-                str(train_script),
-                "--config",
-                str(cfg_path),
-                "--device",
-                "cuda:0",
-                "--train_filelist",
-                str(train_file),
-                "--val_filelist",
-                str(val_file),
-                "--ckpt_dir",
-                str(ckpt_dir),
-                "--resume",
-                str(args.resume),
-                "--max_steps",
-                str(int(args.max_steps)),
-            ]
-            if args.train_batch_size is not None:
-                cmd.extend(["--batch_size", str(int(args.train_batch_size))])
-            _run_stage2_train_with_step_tqdm(cmd=cmd, env=env, cwd=mia_root, subject=str(s), max_steps=int(args.max_steps))
-
-        if not stage2_best.exists():
-            raise FileNotFoundError(f"best.pt not found: {stage2_best}")
-
-        eval_out_dir = ckpt_dir / "eval_results"
-        eval_out_dir.mkdir(parents=True, exist_ok=True)
-        stage1_checkpoint = _extract_stage1_ckpt_from_stage2_best(stage2_best)
-        stage1_checkpoint_aux = _extract_stage1_aux_ckpt_from_stage2_best(stage2_best)
-        eval_yaml = _make_eval_yaml(
-            out_dir=eval_out_dir,
-            device="cuda:0",
-            batch_size=int(args.eval_batch_size),
-            num_workers=int(args.eval_num_workers),
-            ablation_dir=splits_root,
-            train_filelist=f"train_wo_{s}.txt",
-            val_filelists=[f"val_{s}.txt"],
-            stage2_best=stage2_best,
-            stage1_checkpoint=stage1_checkpoint,
-            stage1_checkpoint_aux=stage1_checkpoint_aux,
-        )
         try:
-            subprocess.run([sys.executable, str(eval_script), "--config", str(eval_yaml)], check=True, env=env, cwd=str(mia_root))
-        finally:
-            if eval_yaml.exists():
-                eval_yaml.unlink()
+            ckpt_dir = (out_root / "checkpoints" / s).resolve()
+            stage2_best = ckpt_dir / "best.pt"
+            eval_out_dir = ckpt_dir / "eval_results"
+            summary_processed = eval_out_dir / "summary_processed.csv"
 
-        summary_processed = eval_out_dir / "summary_processed.csv"
-        avg = _parse_stage2_average(summary_processed)
-        rows.append(
-            {
-                "subject": s,
-                "stage2_average": f"{avg:.6f}",
-                "ckpt_dir": str(ckpt_dir),
-                "summary_processed": str(summary_processed),
-            }
-        )
+            if stage2_best.exists() and (summary_processed.exists() or (eval_out_dir / "summary.csv").exists()):
+                avg = _parse_stage2_average(summary_processed)
+                rows.append(
+                    {
+                        "subject": s,
+                        "stage2_average": f"{avg:.6f}",
+                        "ckpt_dir": str(ckpt_dir),
+                        "summary_processed": str(summary_processed),
+                    }
+                )
+                _append_log(run_log, f"[SKIP] {s} already finished")
+                continue
+
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+            train_file = splits_root / f"train_wo_{s}.txt"
+            val_file = splits_root / f"val_{s}.txt"
+            if not train_file.exists():
+                raise FileNotFoundError(f"Missing train file: {train_file}")
+            if not val_file.exists():
+                raise FileNotFoundError(f"Missing val file: {val_file}")
+
+            _append_log(run_log, f"[START] {s}")
+            if not args.eval_only:
+                cmd = [
+                    sys.executable,
+                    str(train_script),
+                    "--config",
+                    str(cfg_path),
+                    "--device",
+                    "cuda:0",
+                    "--train_filelist",
+                    str(train_file),
+                    "--val_filelist",
+                    str(val_file),
+                    "--ckpt_dir",
+                    str(ckpt_dir),
+                    "--resume",
+                    str(args.resume),
+                    "--max_steps",
+                    str(int(args.max_steps)),
+                ]
+                if args.train_batch_size is not None:
+                    cmd.extend(["--batch_size", str(int(args.train_batch_size))])
+                _run_stage2_train_with_step_tqdm(cmd=cmd, env=env, cwd=mia_root, subject=str(s), max_steps=int(args.max_steps))
+
+            if not stage2_best.exists():
+                raise FileNotFoundError(f"best.pt not found: {stage2_best}")
+
+            eval_out_dir.mkdir(parents=True, exist_ok=True)
+            stage1_checkpoint = _extract_stage1_ckpt_from_stage2_best(stage2_best)
+            stage1_checkpoint_aux = _extract_stage1_aux_ckpt_from_stage2_best(stage2_best)
+            eval_yaml = _make_eval_yaml(
+                out_dir=eval_out_dir,
+                device="cuda:0",
+                batch_size=int(args.eval_batch_size),
+                num_workers=int(args.eval_num_workers),
+                ablation_dir=splits_root,
+                train_filelist=f"train_wo_{s}.txt",
+                val_filelists=[f"val_{s}.txt"],
+                stage2_best=stage2_best,
+                stage1_checkpoint=stage1_checkpoint,
+                stage1_checkpoint_aux=stage1_checkpoint_aux,
+            )
+            try:
+                subprocess.run([sys.executable, str(eval_script), "--config", str(eval_yaml)], check=True, env=env, cwd=str(mia_root))
+            finally:
+                if eval_yaml.exists():
+                    eval_yaml.unlink()
+
+            if not summary_processed.exists():
+                raise FileNotFoundError(f"summary_processed.csv not found: {summary_processed}")
+            avg = _parse_stage2_average(summary_processed)
+            rows.append(
+                {
+                    "subject": s,
+                    "stage2_average": f"{avg:.6f}",
+                    "ckpt_dir": str(ckpt_dir),
+                    "summary_processed": str(summary_processed),
+                }
+            )
+            _append_log(run_log, f"[DONE] {s} avg={avg:.6f}")
+        except Exception as e:
+            _append_log(run_log, f"[ERR] {s} {type(e).__name__}: {e}")
+            continue
 
     results_dir = out_root / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -409,7 +496,7 @@ def main() -> None:
         results_dir / "summary_ood_person_pose2emg.md",
         rows,
         title="Stage2 OOD People (Pose2EMG) Summary",
-        base_cfg=base_cfg_path,
+        base_cfg=base_cfg_path or (base_dir / "best.pt"),
         split_dir=split_dir,
     )
     print("[OK] out_root =", out_root)
@@ -417,4 +504,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
