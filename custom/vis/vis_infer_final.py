@@ -144,7 +144,7 @@ def _load_sample_arrays(sample: SampleRef) -> dict[str, np.ndarray]:
 
 def _load_our_model(checkpoint_path: Path, device: Any) -> tuple[Any, Any]:
     from custom.tools.Mia_style_eval import _build_stage2_from_ckpt
-    model, cfg, _, stage1 = _build_stage2_from_ckpt(checkpoint_path, device, stage1_override_ckpt=None)
+    model, cfg, _, stage1 = _build_stage2_from_ckpt(checkpoint_path, device, stage1_override_ckpt=None, stage1_aux_override_ckpt=None)
     return model, stage1
 
 def _infer_our_pose2emg(model, stage1, joints3d_t_25_3, condval, device) -> np.ndarray:

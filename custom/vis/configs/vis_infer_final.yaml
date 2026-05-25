@@ -12,11 +12,11 @@ filter_diversity_exercise: true # if true, guarantees each selected sample belon
 
 pose2emg:
   checkpoint: "/data/litengmo/HSMR/mia_custom/pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"
-  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/batch_stage2_h8_guided_moe/exp_h8_baseline_8exp/best.pt"
+  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/lightweight_stage1_stage2/batch_64/stage2_clip5_official_transformer_pose2emg_stage1_h512_l3_bs64/best.pt"
 
 emg2pose:
   checkpoint: "/data/litengmo/HSMR/mia_custom/custom/tools/official_eval/output/20260510_000126/checkpoints/official_reproduction_cond_emgtopose_threed/model_100.pth"
-  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/batch_emg2pose_ablation/exp_emg2pose_ablation_h8_baseline/best.pt"
+  our_checkpoint: "/data/litengmo/HSMR/mia_custom/custom/stage2/checkpoints/lightweight_stage1_stage2/batch_64/stage2_clip5_official_transformer_emg2pose_stage1_h512_l3_bs64/best.pt"
 
 smpl_src: "/data/litengmo/HSMR/SMPL_models/models/smpl"
 vibe_dst: "/data/litengmo/HSMR/mia_custom/musclesinaction/vibe_data"
