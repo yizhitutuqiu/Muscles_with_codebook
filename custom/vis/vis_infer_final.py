@@ -574,6 +574,7 @@ def main() -> None:
     filter_worst_n = cfg.get("filter_worst_n", 0)
     filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     filter_our_max_rmse_threshold = cfg.get("filter_our_max_rmse_threshold", 999.0)
+    filter_global_random_n = cfg.get("filter_global_random_n", 0)
     
     if task == "pose2emg":
         checkpoint_path = Path(cfg.get("pose2emg", {}).get("checkpoint", ""))
@@ -619,7 +620,7 @@ def main() -> None:
     filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     for ex in exercise_names:
         cand = samples_by_exercise[ex]
-        if filter_worst_n > 0 or filter_our_best_diff_n > 0:
+        if filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
             # Load ALL samples for inference to find the global extreme
             selected_by_exercise[ex] = cand
         else:
@@ -751,11 +752,16 @@ def main() -> None:
                     item["our_pred_joints"] = our_pred_joints
 
     # Global Filtering
-    if filter_worst_n > 0 or filter_our_best_diff_n > 0:
+    if filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
         all_items_with_scores = []
         for exercise, (prepared, _) in all_prepared.items():
             temp_dir = out_dir / "temp" / exercise
             for item in prepared:
+                if filter_global_random_n > 0:
+                    score = random.random()
+                    all_items_with_scores.append((score, item))
+                    continue
+                    
                 # Get Official RMSE
                 metric_file = temp_dir / f"{item['sample'].sample_id}_metric.json"
                 official_rmse = 0.0
@@ -786,9 +792,13 @@ def main() -> None:
         # Sort globally descending
         all_items_with_scores.sort(key=lambda x: x[0], reverse=True)
         
-        target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
-        
-        filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
+        if filter_global_random_n > 0:
+            target_n = filter_global_random_n
+            filter_diversity_exercise = True
+        else:
+            target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
+            filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
+            
         seen_exercises = set()
         selected_items = []
         
@@ -806,7 +816,13 @@ def main() -> None:
         
         # Repackage into a single pseudo-exercise
         if selected_items:
-            pseudo_name = "global_best_diff" if filter_our_best_diff_n > 0 else "global_worst"
+            if filter_global_random_n > 0:
+                pseudo_name = "all_random"
+            elif filter_our_best_diff_n > 0:
+                pseudo_name = "global_best_diff"
+            else:
+                pseudo_name = "global_worst"
+                
             global_max_t = max(item["emg_plot"].shape[1] if task != "pose2emg" else item["gt_emg_plot"].shape[1] for item in selected_items)
             all_prepared = {pseudo_name: (selected_items, global_max_t)}
         else:
@@ -849,7 +865,9 @@ def main() -> None:
 
         cell_h, cell_w = cell_streams[0][0].shape[:2]
         
-        if filter_worst_n > 0 or filter_our_best_diff_n > 0:
+        if exercise == "all_random":
+            vid_out_dir = out_dir / "all_random"
+        elif filter_worst_n > 0 or filter_our_best_diff_n > 0:
             vid_out_dir = out_dir / "selected"
         else:
             vid_out_dir = out_dir / exercise
