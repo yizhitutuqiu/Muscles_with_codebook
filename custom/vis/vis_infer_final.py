@@ -207,8 +207,14 @@ def _render_emg_panel(emg_8_t: np.ndarray, width: int, height: int, title: str, 
     fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
     ax = fig.add_subplot(1, 1, 1)
     ax.set_title(title)
+    if vmax > 0:
+        ax.set_ylim(0.0, vmax)
+    else:
+        # Auto-scale
+        max_val = np.max(emg_8_t)
+        ax.set_ylim(0.0, max_val * 1.1 if max_val > 0 else 1.0)
+        
     ax.set_xlim(0, emg_8_t.shape[1] - 1)
-    ax.set_ylim(0.0, vmax)
     for i in range(8): ax.plot(emg_8_t[i], linewidth=1.0)
     ax.grid(True, linewidth=0.3, alpha=0.6)
     fig.tight_layout(pad=0.2)
@@ -241,6 +247,244 @@ def _compute_3d_bounds(gt_joints: np.ndarray, pred_joints: np.ndarray) -> dict:
         'y_min': y_mid - max_range, 'y_max': y_mid + max_range,
         'z_min': z_mid - max_range, 'z_max': z_mid + max_range,
     }
+
+def _save_static_smpl_emg_sequence(verts_t_v_3: np.ndarray, emg_t_8: np.ndarray, n_frames: int, out_path: Path, step_ratio: float = 0.7, emg_vmax: float = 0.5):
+    import os
+    os.environ['PYOPENGL_PLATFORM'] = 'egl'
+    import pyrender
+    import trimesh
+    from smplx import SMPL
+    import json
+    import matplotlib
+    import matplotlib as mpl
+
+    def colorFader(mix=0):
+        c1=np.array([250/255.0, 253/255.0, 50/255.0]) # Yellow
+        c2=np.array(matplotlib.colors.to_rgb('red')) # Red
+        return (1-mix)*c1 + mix*c2
+
+    def part_segm_to_vertex_colors(part_segm, n_vertices, front, emg_values):
+        vertex_colors = np.ones((n_vertices, 4)) * 150.0
+        vertex_colors[:, 3] = 255.0
+        
+        norm = mpl.colors.Normalize(vmin=0, vmax=emg_vmax)
+        emg_values = np.array(norm(emg_values.tolist()).tolist())
+        emg_values[emg_values > 1.0] = 1.0
+        emg_values[emg_values < 0.0] = 0.0
+        
+        def get_color(x):
+            c = colorFader(x) * 255.0
+            return [c[0], c[1], c[2], 255.0]
+            
+        for k, v in part_segm.items():
+            if front:
+                if k == 'rightUpLeg':
+                    vertex_colors[v] = get_color(emg_values[4])
+                elif k == 'leftUpLeg':
+                    vertex_colors[v] = get_color(emg_values[0])
+                elif k == 'leftArm':
+                    vertex_colors[v] = get_color(emg_values[3])
+                elif k == 'rightArm':
+                    vertex_colors[v] = get_color(emg_values[7])
+            else:
+                if k == 'rightUpLeg':
+                    vertex_colors[v] = get_color(emg_values[5])
+                elif k == 'leftUpLeg':
+                    vertex_colors[v] = get_color(emg_values[1])
+                elif k == 'leftShoulder':
+                    vertex_colors[v] = get_color(emg_values[2])
+                elif k == 'rightShoulder':
+                    vertex_colors[v] = get_color(emg_values[6])
+                    
+        return vertex_colors
+
+    smpl = SMPL('musclesinaction/vibe_data', batch_size=1, create_transl=False)
+    faces = smpl.faces
+    
+    part_segm = json.load(open('musclesinaction/smpl_vert_segmentation.json'))
+    
+    mesh_list = []
+    T = verts_t_v_3.shape[0]
+    indices = np.linspace(0, T - 1, n_frames, dtype=int)
+    
+    min_x, max_x = np.min(verts_t_v_3[:, :, 0]), np.max(verts_t_v_3[:, :, 0])
+    step_x = (max_x - min_x) * step_ratio if max_x > min_x else 0.3
+    
+    # Ensure emg has shape (T, 8)
+    if emg_t_8.shape[0] == 8:
+        emg_t_8 = emg_t_8.T
+        
+    for rank, idx in enumerate(indices):
+        v = verts_t_v_3[idx].copy()
+        v[:, 0] += step_x * rank
+        
+        vc = part_segm_to_vertex_colors(part_segm, v.shape[0], True, emg_t_8[idx])
+        vc = np.clip(vc, 0, 255).astype(np.uint8)
+        
+        mesh = trimesh.Trimesh(v, faces, process=False, vertex_colors=vc)
+        mesh_list.append(mesh)
+        
+    combined = trimesh.util.concatenate(mesh_list)
+    
+    Rx = trimesh.transformations.rotation_matrix(np.radians(180), [1, 0, 0])
+    combined.apply_transform(Rx)
+    
+    scene = pyrender.Scene(bg_color=[1.0, 1.0, 1.0, 0.0], ambient_light=(0.3, 0.3, 0.3))
+    m = pyrender.Mesh.from_trimesh(combined)
+    scene.add(m)
+    
+    # Official lighting setup
+    light = pyrender.PointLight(color=[1.0, 1.0, 1.0], intensity=1)
+    light_pose = np.eye(4)
+    light_pose[:3, 3] = [0, -1, 1]
+    scene.add(light, pose=light_pose)
+    light_pose[:3, 3] = [0, 1, 1]
+    scene.add(light, pose=light_pose)
+    light_pose[:3, 3] = [1, 1, 2]
+    scene.add(light, pose=light_pose)
+    
+    bounds = combined.bounds
+    centroid = combined.centroid
+    extents = combined.extents
+    
+    camera = pyrender.OrthographicCamera(xmag=extents[0]/2 * 1.25, ymag=extents[1]/2 * 1.2)
+    camera_pose = np.eye(4)
+    camera_pose[:3, 3] = centroid
+    camera_pose[2, 3] += extents[2] + 2.0
+    
+    scene.add(camera, pose=camera_pose)
+    
+    r = pyrender.OffscreenRenderer(1200, 400)
+    color, depth = r.render(scene, flags=pyrender.RenderFlags.RGBA)
+    
+    import cv2
+    # Ensure white background
+    valid_mask = (color[:, :, 3] > 0)[:, :, np.newaxis]
+    white_bg = np.ones_like(color[:, :, :3]) * 255
+    output_img = color[:, :, :3] * valid_mask + (1 - valid_mask) * white_bg
+    cv2.imwrite(str(out_path), cv2.cvtColor(output_img.astype(np.uint8), cv2.COLOR_RGB2BGR))
+
+
+def _save_static_motion_sequence_single(joints_t_25_3: np.ndarray, n_frames: int, out_path: Path, min_alpha: float = 0.3, step_ratio: float = 0.7, color_tuple: tuple = (0.0, 0.0, 0.5)):
+    fig = plt.figure(figsize=(10, 4), dpi=150)
+    ax = fig.add_subplot(1, 1, 1, projection='3d')
+    
+    limb_seq = [([17, 15], None), ([15, 0], None), ([0, 16], None), ([16, 18], None), ([0, 1], None), ([1, 2], None), ([2, 3], None), ([3, 4], None), ([1, 5], None), ([5, 6], None), ([6, 7], None), ([1, 8], None), ([8, 9], None), ([9, 10], None), ([10, 24], None), ([8, 12], None), ([12, 13], None), ([13, 14], None), ([24, 22], None), ([24, 24], None), ([22, 23], None), ([14, 19], None), ([14, 21], None), ([19, 20], None)]
+    
+    T = joints_t_25_3.shape[0]
+    indices = np.linspace(0, T - 1, n_frames, dtype=int)
+    
+    min_x, max_x = np.min(joints_t_25_3[:, 0]), np.max(joints_t_25_3[:, 0])
+    step_x = (max_x - min_x) * step_ratio if max_x > min_x else 0.3
+    
+    all_x, all_y, all_z = [], [], []
+    
+    for rank, idx in enumerate(indices):
+        j3d = joints_t_25_3[idx, :25].copy()
+        j3d[:, 0] += step_x * rank
+        
+        all_x.extend(j3d[:, 0])
+        all_y.extend(j3d[:, 2])
+        all_z.extend(j3d[:, 1])
+        
+        alpha_val = min_alpha + (1.0 - min_alpha) * (rank / max(1, n_frames - 1))
+        color = (color_tuple[0], color_tuple[1], color_tuple[2], alpha_val)
+        
+        for j in range(25):
+            ax.scatter3D(j3d[j, 0], j3d[j, 2], j3d[j, 1], color=color, s=15)
+        for vertices, _ in limb_seq:
+            ax.plot3D([j3d[vertices[0], 0], j3d[vertices[1], 0]],
+                      [j3d[vertices[0], 2], j3d[vertices[1], 2]],
+                      [j3d[vertices[0], 1], j3d[vertices[1], 1]],
+                      linewidth=2, color=color)
+                      
+    if all_x:
+        ax.set_xlim3d([min(all_x) - 0.2, max(all_x) + 0.2])
+        ax.set_ylim3d([min(all_y) - 0.2, max(all_y) + 0.2])
+        ax.set_zlim3d([min(all_z) - 0.2, max(all_z) + 0.2])
+        try:
+            x_range = max(all_x) - min(all_x) + 0.4
+            y_range = max(all_y) - min(all_y) + 0.4
+            z_range = max(all_z) - min(all_z) + 0.4
+            ax.set_box_aspect([x_range, y_range, z_range])
+        except AttributeError:
+            pass
+            
+    ax.invert_zaxis()
+    ax.view_init(0, -90)
+    ax.axis('off')
+    
+    fig.tight_layout(pad=0)
+    plt.savefig(out_path, bbox_inches='tight', transparent=False, facecolor='white')
+    plt.close(fig)
+
+def _save_static_motion_sequence_dual(gt_joints_t_25_3: np.ndarray, pred_joints_t_25_3: np.ndarray, n_frames: int, out_path: Path, min_alpha: float = 0.3, step_ratio: float = 0.7):
+    fig = plt.figure(figsize=(10, 4), dpi=150)
+    ax = fig.add_subplot(1, 1, 1, projection='3d')
+    
+    limb_seq = [([17, 15], None), ([15, 0], None), ([0, 16], None), ([16, 18], None), ([0, 1], None), ([1, 2], None), ([2, 3], None), ([3, 4], None), ([1, 5], None), ([5, 6], None), ([6, 7], None), ([1, 8], None), ([8, 9], None), ([9, 10], None), ([10, 24], None), ([8, 12], None), ([12, 13], None), ([13, 14], None), ([24, 22], None), ([24, 24], None), ([22, 23], None), ([14, 19], None), ([14, 21], None), ([19, 20], None)]
+    
+    T = gt_joints_t_25_3.shape[0]
+    indices = np.linspace(0, T - 1, n_frames, dtype=int)
+    
+    min_x, max_x = np.min(gt_joints_t_25_3[:, 0]), np.max(gt_joints_t_25_3[:, 0])
+    step_x = (max_x - min_x) * step_ratio if max_x > min_x else 0.3
+    
+    all_x, all_y, all_z = [], [], []
+    
+    for rank, idx in enumerate(indices):
+        # GT
+        j3d_gt = gt_joints_t_25_3[idx, :25].copy()
+        j3d_gt[:, 0] += step_x * rank
+        
+        # Pred
+        j3d_pred = pred_joints_t_25_3[idx, :25].copy()
+        j3d_pred[:, 0] += step_x * rank
+        
+        all_x.extend(j3d_gt[:, 0])
+        all_y.extend(j3d_gt[:, 2])
+        all_z.extend(j3d_gt[:, 1])
+        all_x.extend(j3d_pred[:, 0])
+        all_y.extend(j3d_pred[:, 2])
+        all_z.extend(j3d_pred[:, 1])
+        
+        alpha_val = min_alpha + (1.0 - min_alpha) * (rank / max(1, n_frames - 1))
+        color_gt = (0.0, 0.5, 0.0, alpha_val) # Green for GT
+        color_pred = (0.0, 0.0, 0.5, alpha_val) # Blue for Pred
+        
+        for j in range(25):
+            ax.scatter3D(j3d_gt[j, 0], j3d_gt[j, 2], j3d_gt[j, 1], color=color_gt, s=15)
+            ax.scatter3D(j3d_pred[j, 0], j3d_pred[j, 2], j3d_pred[j, 1], color=color_pred, s=15)
+            
+        for vertices, _ in limb_seq:
+            ax.plot3D([j3d_gt[vertices[0], 0], j3d_gt[vertices[1], 0]],
+                      [j3d_gt[vertices[0], 2], j3d_gt[vertices[1], 2]],
+                      [j3d_gt[vertices[0], 1], j3d_gt[vertices[1], 1]],
+                      linewidth=2, color=color_gt)
+            ax.plot3D([j3d_pred[vertices[0], 0], j3d_pred[vertices[1], 0]],
+                      [j3d_pred[vertices[0], 2], j3d_pred[vertices[1], 2]],
+                      [j3d_pred[vertices[0], 1], j3d_pred[vertices[1], 1]],
+                      linewidth=2, color=color_pred)
+                      
+    if all_x:
+        ax.set_xlim3d([min(all_x) - 0.2, max(all_x) + 0.2])
+        ax.set_ylim3d([min(all_y) - 0.2, max(all_y) + 0.2])
+        ax.set_zlim3d([min(all_z) - 0.2, max(all_z) + 0.2])
+        try:
+            x_range = max(all_x) - min(all_x) + 0.4
+            y_range = max(all_y) - min(all_y) + 0.4
+            z_range = max(all_z) - min(all_z) + 0.4
+            ax.set_box_aspect([x_range, y_range, z_range])
+        except AttributeError:
+            pass
+            
+    ax.invert_zaxis()
+    ax.view_init(0, -90)
+    ax.axis('off')
+    
+    fig.tight_layout(pad=0)
+    plt.savefig(out_path, bbox_inches='tight', transparent=False, facecolor='white')
+    plt.close(fig)
 
 def _render_skeleton_panel(joints3d_25_3: np.ndarray, width: int, height: int, title: str, bounds: dict = None, color_override: str = None) -> np.ndarray:
     fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
@@ -703,6 +947,7 @@ def main() -> None:
                     
                 prepared.append({
                     "sample": sample, "gt_joints": arrays["joints3d_t_25_3"], "pred_joints": pred_joints,
+                    "verts": arrays["verts_t_v_3"],
                     "emg_plot": arrays["emg_8_t"].astype(np.float32),
                     "raw_joints": arrays["joints3d_t_25_3"], "raw_emg": arrays["emg_8_t"]
                 })
@@ -832,6 +1077,22 @@ def main() -> None:
     for exercise, (prepared, max_t) in tqdm(sorted(all_prepared.items(), key=lambda x: x[0]), desc="Phase 2: Visualization"):
         t1 = time.time()
         cell_streams = []
+        
+        if exercise == "all_random":
+            vid_out_dir = out_dir / "all_random"
+        elif filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
+            vid_out_dir = out_dir / "selected"
+        else:
+            vid_out_dir = out_dir / exercise
+        
+        vid_out_dir.mkdir(parents=True, exist_ok=True)
+        
+        export_static_details = cfg.get("export_static_details", False)
+        static_details_n_frames = cfg.get("static_details_n_frames", 5)
+        static_details_min_alpha = cfg.get("static_details_min_alpha", 0.3)
+        static_details_step_ratio = cfg.get("static_details_step_ratio", 0.7)
+        static_details_emg_vmax = cfg.get("static_details_emg_vmax", 0.5)
+        
         for item in prepared:
             if task == "pose2emg":
                 item["verts"] = _pad_time_first(item["verts"], max_t)
@@ -862,15 +1123,46 @@ def main() -> None:
                     render_width, render_height, plot_emg_vmax, debug_overlay_text, align_root_to_gt, render_four_rows, render_emg_curves
                 )
             cell_streams.append(cell_frames)
+            
+            if export_static_details:
+                details_dir = vid_out_dir / "details" / f"{item['sample'].exercise}_{item['sample'].sample_id}"
+                details_dir.mkdir(parents=True, exist_ok=True)
+                
+                # 1. Motion Sequence
+                pred_j = item["our_pred_joints"] if "our_pred_joints" in item and item["our_pred_joints"] is not None else item["pred_joints"]
+                
+                # Plot GT (Green)
+                _save_static_motion_sequence_single(
+                    item["gt_joints"], static_details_n_frames, details_dir / "motion_sequence_gt.png",
+                    min_alpha=static_details_min_alpha, step_ratio=static_details_step_ratio, color_tuple=(0.0, 0.5, 0.0)
+                )
+                
+                # Plot Pred (Blue)
+                _save_static_motion_sequence_single(
+                    pred_j, static_details_n_frames, details_dir / "motion_sequence_pred.png",
+                    min_alpha=static_details_min_alpha, step_ratio=static_details_step_ratio, color_tuple=(0.0, 0.0, 0.5)
+                )
+                
+                # Plot Overlay
+                _save_static_motion_sequence_dual(
+                    item["gt_joints"], pred_j, static_details_n_frames, details_dir / "motion_sequence.png",
+                    min_alpha=static_details_min_alpha, step_ratio=static_details_step_ratio
+                )
+                
+                # Plot SMPL Mesh + EMG
+                if "verts" in item:
+                    emg_data_for_mesh = item["gt_emg_plot"] if "gt_emg_plot" in item else item["emg_plot"]
+                    _save_static_smpl_emg_sequence(
+                        item["verts"], emg_data_for_mesh, static_details_n_frames, details_dir / "motion_sequence_smpl_emg.png",
+                        step_ratio=static_details_step_ratio, emg_vmax=static_details_emg_vmax
+                    )
+                
+                # 2. EMG Curve
+                emg_array = item["emg_plot"] if task == "emg2pose" else item["gt_emg_plot"]
+                emg_panel = _render_emg_panel(emg_array, 800, 400, "EMG Curve", vmax=plot_emg_vmax)
+                cv2.imwrite(str(details_dir / "emg_curve.png"), cv2.cvtColor(emg_panel, cv2.COLOR_RGB2BGR))
 
         cell_h, cell_w = cell_streams[0][0].shape[:2]
-        
-        if exercise == "all_random":
-            vid_out_dir = out_dir / "all_random"
-        elif filter_worst_n > 0 or filter_our_best_diff_n > 0:
-            vid_out_dir = out_dir / "selected"
-        else:
-            vid_out_dir = out_dir / exercise
         
         writer = _open_video_writer(vid_out_dir / f"grid_{task}_n{len(prepared)}.mp4", fps, (cell_w * len(cell_streams), cell_h))
         try:

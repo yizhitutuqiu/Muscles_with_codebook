@@ -6,10 +6,16 @@ seed: 1556738
 max_exercises: -1
 
 filter_worst_n: 0 # if > 0, only visualize the n samples with highest RMSE per exercise
-filter_our_best_diff_n: 0 # if > 0, only visualize the n samples with max (official_rmse - our_rmse)
+filter_our_best_diff_n: 3 # if > 0, only visualize the n samples with max (official_rmse - our_rmse)
 filter_our_max_rmse_threshold: 0.1 # if < 999.0, only consider samples where our model's RMSE is <= this threshold
 filter_diversity_exercise: true # if true, guarantees each selected sample belongs to a different exercise
 filter_global_random_n: 0 # if > 0, randomly select n samples from different exercises globally
+
+export_static_details: true # if true, saves a details/ directory per video with static motion sequence and EMG plot
+static_details_n_frames: 6 # number of frames to sample for the static motion sequence
+static_details_min_alpha: 0.7 # minimum alpha (opacity) for the earliest frame in the sequence
+static_details_step_ratio: 0.8 # multiplier for the distance between consecutive skeletons (lower = closer)
+static_details_emg_vmax: 200 # maximum EMG value for mesh coloring (values above this will be fully red)
 
 pose2emg:
   checkpoint: "/data/litengmo/HSMR/mia_custom/pretrained-checkpoints/generalization_new_cond_clean_posetoemg/model_100.pth"
@@ -31,7 +37,7 @@ render_height: 640
 plot_width: 420
 plot_height: 640
 
-plot_emg_vmax: 300.0
+plot_emg_vmax: 300.0 # if > 0, fixes the Y-axis range to [-vmax, vmax]. If <= 0, auto-scales to the data min/max.
 mesh_views: "both" # choices: "front", "back", "both"
 align_root_to_gt: false
 render_four_rows: false # if true, renders 4 rows (GT, Official, Ours, Overlay). if false, renders 2 rows (Official+GT, Ours+GT)
