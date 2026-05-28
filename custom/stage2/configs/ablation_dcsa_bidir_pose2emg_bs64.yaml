@@ -1,6 +1,6 @@
 experiment:
   name: ablation_dcsa_bidir_pose2emg_bs64
-  seed: 820
+  seed: 620
 
 runtime:
   device: cuda

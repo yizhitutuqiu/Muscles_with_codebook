@@ -798,6 +798,69 @@ def _render_sequence_cells_emg2pose(
             frames.append(np.concatenate([row1, row2], axis=0))
     return frames
 
+class ModelManager:
+    def __init__(self, cfg, task, device):
+        self.cfg = cfg
+        self.task = task
+        self.device = device
+        self.eval_mode = cfg.get("eval_mode", "id")
+        self.official_cache = {}
+        self.our_cache = {}
+
+    def get_official_model(self, sample):
+        if self.eval_mode == "id":
+            ckpt_path = Path(self.cfg.get(self.task, {}).get("checkpoint", ""))
+            key = str(ckpt_path)
+            if key not in self.official_cache:
+                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
+            return self.official_cache[key]
+        elif self.eval_mode == "ood_exercise":
+            ckpt_dir = Path(self.cfg.get("ood_exercise", {}).get(self.task, {}).get("checkpoint_dir", ""))
+            task_suffix = "emgtopose" if self.task == "emg2pose" else "posetoemg"
+            ckpt_path = ckpt_dir / f"official_ood_cond_{sample.exercise}_{task_suffix}" / "model_100.pth"
+            key = str(ckpt_path)
+            if key not in self.official_cache:
+                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
+            return self.official_cache[key]
+        elif self.eval_mode == "ood_person":
+            ckpt_dir = Path(self.cfg.get("ood_person", {}).get(self.task, {}).get("checkpoint_dir", ""))
+            task_suffix = "emgtopose" if self.task == "emg2pose" else "posetoemg"
+            ckpt_path = ckpt_dir / f"official_ood_person_{sample.subject}_{task_suffix}" / "model_100.pth"
+            key = str(ckpt_path)
+            if key not in self.official_cache:
+                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
+            return self.official_cache[key]
+        else:
+            raise ValueError(f"Unknown eval_mode: {self.eval_mode}")
+
+    def get_our_model(self, sample):
+        if self.eval_mode == "id":
+            ckpt_path = Path(self.cfg.get(self.task, {}).get("our_checkpoint", ""))
+            if not ckpt_path.exists():
+                return None, None
+            key = str(ckpt_path)
+            if key not in self.our_cache:
+                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
+            return self.our_cache[key]
+        elif self.eval_mode == "ood_exercise":
+            ckpt_dir = Path(self.cfg.get("ood_exercise", {}).get(self.task, {}).get("our_checkpoint_dir", ""))
+            ckpt_path = ckpt_dir / sample.exercise / "best.pt"
+            if not ckpt_path.exists():
+                return None, None
+            key = str(ckpt_path)
+            if key not in self.our_cache:
+                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
+            return self.our_cache[key]
+        elif self.eval_mode == "ood_person":
+            ckpt_dir = Path(self.cfg.get("ood_person", {}).get(self.task, {}).get("our_checkpoint_dir", ""))
+            ckpt_path = ckpt_dir / sample.subject / "best.pt"
+            if not ckpt_path.exists():
+                return None, None
+            key = str(ckpt_path)
+            if key not in self.our_cache:
+                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
+            return self.our_cache[key]
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="/data/litengmo/HSMR/mia_custom/custom/vis/configs/vis_infer_final.yaml")
@@ -885,10 +948,7 @@ def main() -> None:
         if background is not None: background = _resize_letterbox(background.astype(np.uint8), render_width, render_height)
         else: background = np.zeros((render_height, render_width, 3), dtype=np.uint8)
     
-    model = _load_model(checkpoint_path, device, task)
-    our_model, our_stage1 = None, None
-    if our_checkpoint_path.exists():
-        our_model, our_stage1 = _load_our_model(our_checkpoint_path, device)
+    model_manager = ModelManager(cfg, task, device)
 
     total_inference_time = 0.0
     total_visualization_time = 0.0
@@ -899,6 +959,7 @@ def main() -> None:
         prepared = []
         max_t = 0
         for sample in samples_in_ex:
+            model = model_manager.get_official_model(sample)
             arrays = _load_sample_arrays(sample)
             condval = _subject_to_condval(sample.subject)
             t = arrays["emg_8_t"].shape[1]
@@ -957,44 +1018,45 @@ def main() -> None:
 
 
     # Run Our Model Inference on the selected items (Phase 1.5)
-    if our_checkpoint_path.exists():
-        if our_model is None:
-            our_model, our_stage1 = _load_our_model(our_checkpoint_path, device)
-        for exercise, (prepared, max_t) in tqdm(all_prepared.items(), desc="Phase 1.5: Our Model Inference & Cache"):
-            for item in prepared:
-                sample = item["sample"]
-                temp_dir = out_dir / "temp" / sample.exercise
-                our_cache_file = temp_dir / f"{sample.sample_id}_our_pred.npy"
-                our_metric_file = temp_dir / f"{sample.sample_id}_our_metric.json"
-                condval = _subject_to_condval(sample.subject)
-                
-                if task == "pose2emg":
-                    if our_cache_file.exists():
-                        our_pred_emg_8_t = np.load(our_cache_file)
-                    else:
-                        our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
-                        np.save(our_cache_file, our_pred_emg_8_t)
-                    
-                    if not our_metric_file.exists():
-                        gt_flat = item["raw_emg"].T
-                        metric = _compute_official_metrics(our_pred_emg_8_t.T, gt_flat, task)
-                        with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
-                        
-                    our_pred_emg_mesh = _normalize_emg_for_mesh(our_pred_emg_8_t, sample.subject)
-                    item["our_pred_emg_plot"] = our_pred_emg_8_t
-                    item["our_pred_emg_mesh"] = our_pred_emg_mesh
+    for exercise, (prepared, max_t) in tqdm(all_prepared.items(), desc="Phase 1.5: Our Model Inference & Cache"):
+        for item in prepared:
+            sample = item["sample"]
+            our_model, our_stage1 = model_manager.get_our_model(sample)
+            if our_model is None:
+                continue
+            
+            temp_dir = out_dir / "temp" / sample.exercise
+            our_cache_file = temp_dir / f"{sample.sample_id}_our_pred.npy"
+            our_metric_file = temp_dir / f"{sample.sample_id}_our_metric.json"
+            condval = _subject_to_condval(sample.subject)
+            
+            if task == "pose2emg":
+                if our_cache_file.exists():
+                    our_pred_emg_8_t = np.load(our_cache_file)
                 else:
-                    if our_cache_file.exists():
-                        our_pred_joints = np.load(our_cache_file)
-                    else:
-                        our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
-                        np.save(our_cache_file, our_pred_joints)
-                        
-                    if not our_metric_file.exists():
-                        metric = _compute_official_metrics(our_pred_joints, item["raw_joints"][:, :25, :], task)
-                        with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
-                        
-                    item["our_pred_joints"] = our_pred_joints
+                    our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
+                    np.save(our_cache_file, our_pred_emg_8_t)
+                
+                if not our_metric_file.exists():
+                    gt_flat = item["raw_emg"].T
+                    metric = _compute_official_metrics(our_pred_emg_8_t.T, gt_flat, task)
+                    with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                    
+                our_pred_emg_mesh = _normalize_emg_for_mesh(our_pred_emg_8_t, sample.subject)
+                item["our_pred_emg_plot"] = our_pred_emg_8_t
+                item["our_pred_emg_mesh"] = our_pred_emg_mesh
+            else:
+                if our_cache_file.exists():
+                    our_pred_joints = np.load(our_cache_file)
+                else:
+                    our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
+                    np.save(our_cache_file, our_pred_joints)
+                    
+                if not our_metric_file.exists():
+                    metric = _compute_official_metrics(our_pred_joints, item["raw_joints"][:, :25, :], task)
+                    with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                    
+                item["our_pred_joints"] = our_pred_joints
 
     # Global Filtering
     if filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
@@ -1039,23 +1101,30 @@ def main() -> None:
         
         if filter_global_random_n > 0:
             target_n = filter_global_random_n
-            filter_diversity_exercise = True
+            filter_diversity_target = "exercise" # default for random
         else:
             target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
-            filter_diversity_exercise = cfg.get("filter_diversity_exercise", False)
+            filter_diversity_target = cfg.get("filter_diversity_target", "none")
             
-        seen_exercises = set()
+        seen_targets = set()
         selected_items = []
         
         for score, item in all_items_with_scores:
             if len(selected_items) >= target_n:
                 break
                 
-            exercise_name = item['sample'].exercise
-            if filter_diversity_exercise:
-                if exercise_name in seen_exercises:
+            sample = item['sample']
+            if filter_diversity_target == "exercise":
+                target_val = sample.exercise
+            elif filter_diversity_target == "subject":
+                target_val = sample.subject
+            else:
+                target_val = None
+                
+            if target_val is not None:
+                if target_val in seen_targets:
                     continue
-                seen_exercises.add(exercise_name)
+                seen_targets.add(target_val)
                 
             selected_items.append(item)
         
