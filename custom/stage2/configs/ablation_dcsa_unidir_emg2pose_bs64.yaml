@@ -1,0 +1,67 @@
+experiment:
+  name: ablation_dcsa_unidir_emg2pose_bs64
+  seed: 823
+
+runtime:
+  device: cuda
+  num_workers: 8
+  log_every: 25
+  max_steps: 20000
+  save_every: 1000
+  eval_every: 400
+  grad_clip_norm: 1.0
+  distributed:
+    enabled: false
+    gpus: [0]
+    backend: nccl
+
+optimizer:
+  lr: 0.0001
+  weight_decay: 0.0001
+  warmup_steps: 600
+  lr_schedule: cosine_annealing
+  lr_min: 8.0e-6
+
+data:
+  split: train
+  batch_size: 64
+  step: 30
+  joints3d_root_center: true
+  joints3d_root_index: 8
+  cond: "False"
+  std: "False"
+  percent: 1.0
+  emg_normalize_target: true
+  train_filelist: custom/tools/datasetsplits/miaofficial_train.txt
+  val_filelist: custom/tools/datasetsplits/miaofficial_val_eval.txt
+  max_samples: null
+  require_files:
+    - emgvalues.npy
+    - joints3d.npy
+
+stage1:
+  checkpoint: custom/checkpoints/new_clip5_codebook_with_exerciseloss/exp_shared_head_h512_l3/best.pt
+
+checkpoints:
+  dir: custom/ablations/dcsa_ablation_batch64/ablation_dcsa_unidir_emg2pose_bs64
+
+model:
+  task: "emg2pose"
+  use_cond: false
+  token_count: 1
+  dim: 256
+  cont_encoder_type: emg_8
+  cont_hidden_dim: 1024
+  cont_joint_hidden_dim: 128
+
+  fusion_type: dcsa_asymmetric
+  dcsa:
+    dim: 256
+    num_heads: 8
+    dropout: 0.2
+
+  temporal_type: mia_official_transformer
+
+  emg_head_type: identity
+  emg_pred_mode: full
+  max_seq_len: 256
