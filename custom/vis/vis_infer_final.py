@@ -895,11 +895,18 @@ def main() -> None:
     base_out_dir = cfg.get("out_dir", "/data/litengmo/HSMR/mia_custom/custom/output")
     if base_out_dir.endswith("vis_infer_final"):
         base_out_dir = os.path.dirname(base_out_dir)
-    out_dir = Path(base_out_dir) / f"vis_infer_final_{task}"
     smpl_src_dir = Path(cfg.get("smpl_src", "/data/litengmo/HSMR/SMPL_models/models/smpl"))
     vibe_dst_dir = Path(cfg.get("vibe_dst", "/data/litengmo/HSMR/mia_custom/musclesinaction/vibe_data"))
     device_str = cfg.get("device", "cuda")
     fps = cfg.get("fps", 10)
+    
+    # Set up paths based on configuration
+    eval_mode = cfg.get("eval_mode", "id")
+    task_dir_name = f"vis_infer_final_{task}"
+    if eval_mode != "id":
+        task_dir_name = f"{task_dir_name}_{eval_mode}"
+    out_dir = Path(base_out_dir) / task_dir_name
+    
     render_width = cfg.get("render_width", 360)
     render_height = cfg.get("render_height", 640)
     plot_width = cfg.get("plot_width", 420)
@@ -1025,6 +1032,9 @@ def main() -> None:
             if our_model is None:
                 continue
             
+            # Use batch_size from config, default to None (run all at once)
+            batch_size = cfg.get("inference_batch_size", None)
+            
             temp_dir = out_dir / "temp" / sample.exercise
             our_cache_file = temp_dir / f"{sample.sample_id}_our_pred.npy"
             our_metric_file = temp_dir / f"{sample.sample_id}_our_metric.json"
@@ -1034,7 +1044,15 @@ def main() -> None:
                 if our_cache_file.exists():
                     our_pred_emg_8_t = np.load(our_cache_file)
                 else:
-                    our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
+                    if batch_size and item["raw_joints"].shape[0] > batch_size:
+                        our_pred_emg_8_t = []
+                        for b_idx in range(0, item["raw_joints"].shape[0], batch_size):
+                            b_joints = item["raw_joints"][b_idx:b_idx+batch_size]
+                            b_pred = _infer_our_pose2emg(our_model, our_stage1, b_joints, condval, device)
+                            our_pred_emg_8_t.append(b_pred)
+                        our_pred_emg_8_t = np.concatenate(our_pred_emg_8_t, axis=1) # t is dimension 1 for emg
+                    else:
+                        our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
                     np.save(our_cache_file, our_pred_emg_8_t)
                 
                 if not our_metric_file.exists():
@@ -1049,7 +1067,16 @@ def main() -> None:
                 if our_cache_file.exists():
                     our_pred_joints = np.load(our_cache_file)
                 else:
-                    our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
+                    if batch_size and item["raw_emg"].shape[1] > batch_size:
+                        our_pred_joints = []
+                        for b_idx in range(0, item["raw_emg"].shape[1], batch_size):
+                            b_emg = item["raw_emg"][:, b_idx:b_idx+batch_size]
+                            b_joints = item["raw_joints"][b_idx:b_idx+batch_size]
+                            b_pred = _infer_our_emg2pose(our_model, our_stage1, b_emg, condval, device, b_joints)
+                            our_pred_joints.append(b_pred)
+                        our_pred_joints = np.concatenate(our_pred_joints, axis=0) # t is dimension 0 for joints
+                    else:
+                        our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
                     np.save(our_cache_file, our_pred_joints)
                     
                 if not our_metric_file.exists():
@@ -1064,7 +1091,7 @@ def main() -> None:
         for exercise, (prepared, _) in all_prepared.items():
             temp_dir = out_dir / "temp" / exercise
             for item in prepared:
-                if filter_global_random_n > 0:
+                if filter_global_random_n > 0 and filter_our_best_diff_n == 0 and filter_worst_n == 0:
                     score = random.random()
                     all_items_with_scores.append((score, item))
                     continue
@@ -1099,14 +1126,18 @@ def main() -> None:
         # Sort globally descending
         all_items_with_scores.sort(key=lambda x: x[0], reverse=True)
         
-        if filter_global_random_n > 0:
-            target_n = filter_global_random_n
-            filter_diversity_target = "exercise" # default for random
-        else:
-            target_n = filter_our_best_diff_n if filter_our_best_diff_n > 0 else filter_worst_n
+        if filter_our_best_diff_n > 0:
+            target_n = filter_our_best_diff_n
             filter_diversity_target = cfg.get("filter_diversity_target", "none")
+        elif filter_worst_n > 0:
+            target_n = filter_worst_n
+            filter_diversity_target = cfg.get("filter_diversity_target", "none")
+        else:
+            target_n = filter_global_random_n
+            filter_diversity_target = "both" # default for pure random
             
-        seen_targets = set()
+        seen_exercises = set()
+        seen_subjects = set()
         selected_items = []
         
         for score, item in all_items_with_scores:
@@ -1114,23 +1145,32 @@ def main() -> None:
                 break
                 
             sample = item['sample']
-            if filter_diversity_target == "exercise":
-                target_val = sample.exercise
-            elif filter_diversity_target == "subject":
-                target_val = sample.subject
-            else:
-                target_val = None
+            skip = False
+            
+            if filter_diversity_target in ["exercise", "both"]:
+                if sample.exercise in seen_exercises:
+                    skip = True
+            
+            if filter_diversity_target in ["subject", "both"]:
+                if sample.subject in seen_subjects:
+                    skip = True
+                    
+            if skip:
+                continue
                 
-            if target_val is not None:
-                if target_val in seen_targets:
-                    continue
-                seen_targets.add(target_val)
+            seen_exercises.add(sample.exercise)
+            seen_subjects.add(sample.subject)
                 
             selected_items.append(item)
+            
+        # If both a metric filter and global random are set, random sample from the filtered results
+        if (filter_our_best_diff_n > 0 or filter_worst_n > 0) and filter_global_random_n > 0:
+            if len(selected_items) > filter_global_random_n:
+                selected_items = random.sample(selected_items, filter_global_random_n)
         
         # Repackage into a single pseudo-exercise
         if selected_items:
-            if filter_global_random_n > 0:
+            if filter_global_random_n > 0 and filter_our_best_diff_n == 0 and filter_worst_n == 0:
                 pseudo_name = "all_random"
             elif filter_our_best_diff_n > 0:
                 pseudo_name = "global_best_diff"
