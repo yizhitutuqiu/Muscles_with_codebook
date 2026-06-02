@@ -189,13 +189,33 @@ def _load_model(checkpoint_path: Path, device: Any, task: str) -> Any:
     else:
         raise ValueError(f"Unknown task: {task}")
 
-    model = TransformerEnc(
-        threed="True", num_tokens=50, dim_model=128, num_classes=20, num_heads=16,
-        classif=False, num_encoder_layers=8, num_decoder_layers=3, dropout_p=0.1,
-        device=str(device), embedding=True, step=30,
-    )
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    state_dict = checkpoint["my_model"] if isinstance(checkpoint, dict) and "my_model" in checkpoint else checkpoint
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Unsupported checkpoint type: {type(payload)}")
+
+    if "model_args" in payload:
+        model_args = dict(payload["model_args"])
+    else:
+        model_args = dict(
+            threed="True",
+            num_tokens=1,
+            dim_model=128,
+            num_classes=8,
+            num_heads=8,
+            classif=False,
+            num_encoder_layers=4,
+            num_decoder_layers=4,
+            dropout_p=0.1,
+            device=str(device),
+            embedding="False",
+            step=30,
+        )
+    model_args["device"] = str(device)
+    model_args["step"] = int(model_args.get("step", 30))
+
+    model = TransformerEnc(**model_args).to(device)
+    state_dict = payload.get("my_model", payload)
+    
     if any(k.startswith("module.") for k in state_dict.keys()):
         state_dict = {k.removeprefix("module."): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict, strict=True)
@@ -804,62 +824,74 @@ class ModelManager:
         self.task = task
         self.device = device
         self.eval_mode = cfg.get("eval_mode", "id")
-        self.official_cache = {}
-        self.our_cache = {}
+        self.ood_use_model_eval_on_id = bool(cfg.get("ood_use_model_eval_on_id", False))
+        self.ood_target_exercise = str(cfg.get("ood_target_exercise", "") or "")
+        self.ood_target_subject = str(cfg.get("ood_target_subject", "") or "")
+        self.current_official_key = None
+        self.current_official_model = None
+        self.current_our_key = None
+        self.current_our_model = None
 
     def get_official_model(self, sample):
         if self.eval_mode == "id":
             ckpt_path = Path(self.cfg.get(self.task, {}).get("checkpoint", ""))
-            key = str(ckpt_path)
-            if key not in self.official_cache:
-                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
-            return self.official_cache[key]
         elif self.eval_mode == "ood_exercise":
             ckpt_dir = Path(self.cfg.get("ood_exercise", {}).get(self.task, {}).get("checkpoint_dir", ""))
             task_suffix = "emgtopose" if self.task == "emg2pose" else "posetoemg"
-            ckpt_path = ckpt_dir / f"official_ood_cond_{sample.exercise}_{task_suffix}" / "model_100.pth"
-            key = str(ckpt_path)
-            if key not in self.official_cache:
-                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
-            return self.official_cache[key]
+            exercise = self.ood_target_exercise or sample.exercise
+            if self.ood_use_model_eval_on_id and not self.ood_target_exercise:
+                raise ValueError("ood_use_model_eval_on_id requires ood_target_exercise when eval_mode=ood_exercise")
+            ckpt_path = ckpt_dir / f"official_ood_cond_{exercise}_{task_suffix}" / "model_100.pth"
         elif self.eval_mode == "ood_person":
             ckpt_dir = Path(self.cfg.get("ood_person", {}).get(self.task, {}).get("checkpoint_dir", ""))
             task_suffix = "emgtopose" if self.task == "emg2pose" else "posetoemg"
-            ckpt_path = ckpt_dir / f"official_ood_person_{sample.subject}_{task_suffix}" / "model_100.pth"
-            key = str(ckpt_path)
-            if key not in self.official_cache:
-                self.official_cache[key] = _load_model(ckpt_path, self.device, self.task)
-            return self.official_cache[key]
+            subject = self.ood_target_subject or sample.subject
+            if self.ood_use_model_eval_on_id and not self.ood_target_subject:
+                raise ValueError("ood_use_model_eval_on_id requires ood_target_subject when eval_mode=ood_person")
+            ckpt_path = ckpt_dir / f"official_ood_person_{subject}_{task_suffix}" / "model_100.pth"
         else:
             raise ValueError(f"Unknown eval_mode: {self.eval_mode}")
+
+        key = str(ckpt_path)
+        if key != self.current_official_key:
+            if self.current_official_model is not None:
+                del self.current_official_model
+                import torch
+                torch.cuda.empty_cache()
+            self.current_official_model = _load_model(ckpt_path, self.device, self.task)
+            self.current_official_key = key
+        return self.current_official_model
 
     def get_our_model(self, sample):
         if self.eval_mode == "id":
             ckpt_path = Path(self.cfg.get(self.task, {}).get("our_checkpoint", ""))
-            if not ckpt_path.exists():
-                return None, None
-            key = str(ckpt_path)
-            if key not in self.our_cache:
-                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
-            return self.our_cache[key]
         elif self.eval_mode == "ood_exercise":
             ckpt_dir = Path(self.cfg.get("ood_exercise", {}).get(self.task, {}).get("our_checkpoint_dir", ""))
-            ckpt_path = ckpt_dir / sample.exercise / "best.pt"
-            if not ckpt_path.exists():
-                return None, None
-            key = str(ckpt_path)
-            if key not in self.our_cache:
-                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
-            return self.our_cache[key]
+            exercise = self.ood_target_exercise or sample.exercise
+            if self.ood_use_model_eval_on_id and not self.ood_target_exercise:
+                raise ValueError("ood_use_model_eval_on_id requires ood_target_exercise when eval_mode=ood_exercise")
+            ckpt_path = ckpt_dir / exercise / "best.pt"
         elif self.eval_mode == "ood_person":
             ckpt_dir = Path(self.cfg.get("ood_person", {}).get(self.task, {}).get("our_checkpoint_dir", ""))
-            ckpt_path = ckpt_dir / sample.subject / "best.pt"
-            if not ckpt_path.exists():
-                return None, None
-            key = str(ckpt_path)
-            if key not in self.our_cache:
-                self.our_cache[key] = _load_our_model(ckpt_path, self.device)
-            return self.our_cache[key]
+            subject = self.ood_target_subject or sample.subject
+            if self.ood_use_model_eval_on_id and not self.ood_target_subject:
+                raise ValueError("ood_use_model_eval_on_id requires ood_target_subject when eval_mode=ood_person")
+            ckpt_path = ckpt_dir / subject / "best.pt"
+        else:
+            raise ValueError(f"Unknown eval_mode: {self.eval_mode}")
+
+        if not ckpt_path.exists():
+            return None, None
+            
+        key = str(ckpt_path)
+        if key != self.current_our_key:
+            if self.current_our_model is not None:
+                del self.current_our_model
+                import torch
+                torch.cuda.empty_cache()
+            self.current_our_model = _load_our_model(ckpt_path, self.device)
+            self.current_our_key = key
+        return self.current_our_model
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -873,12 +905,17 @@ def main() -> None:
         cfg = yaml.safe_load(f)
 
     task = cfg.get("task", "pose2emg")
+    eval_mode = cfg.get("eval_mode", "id")
+    ood_use_model_eval_on_id = bool(cfg.get("ood_use_model_eval_on_id", False))
+    ood_target_exercise = str(cfg.get("ood_target_exercise", "") or "")
+    ood_target_subject = str(cfg.get("ood_target_subject", "") or "")
     dataset_root = Path(cfg.get("dataset_root", "/data/litengmo/HSMR/mia_custom/MIADatasetOfficial"))
     phase = cfg.get("phase", "val")
     n_per_exercise = cfg.get("n_per_exercise", 3)
     seed = cfg.get("seed", 0)
     max_exercises = cfg.get("max_exercises", -1)
     filter_worst_n = cfg.get("filter_worst_n", 0)
+    filter_our_best_n = cfg.get("filter_our_best_n", 0)
     filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     filter_our_max_rmse_threshold = cfg.get("filter_our_max_rmse_threshold", 999.0)
     filter_global_random_n = cfg.get("filter_global_random_n", 0)
@@ -895,18 +932,21 @@ def main() -> None:
     base_out_dir = cfg.get("out_dir", "/data/litengmo/HSMR/mia_custom/custom/output")
     if base_out_dir.endswith("vis_infer_final"):
         base_out_dir = os.path.dirname(base_out_dir)
+    if eval_mode == "id":
+        out_dir = Path(base_out_dir) / f"vis_infer_final_{task}"
+    else:
+        suffix_parts = [eval_mode]
+        if eval_mode == "ood_exercise" and ood_target_exercise:
+            suffix_parts.append(ood_target_exercise)
+        if eval_mode == "ood_person" and ood_target_subject:
+            suffix_parts.append(ood_target_subject)
+        if ood_use_model_eval_on_id:
+            suffix_parts.append("eval_id")
+        out_dir = Path(base_out_dir) / f"vis_infer_final_{task}_{'_'.join(suffix_parts)}"
     smpl_src_dir = Path(cfg.get("smpl_src", "/data/litengmo/HSMR/SMPL_models/models/smpl"))
     vibe_dst_dir = Path(cfg.get("vibe_dst", "/data/litengmo/HSMR/mia_custom/musclesinaction/vibe_data"))
     device_str = cfg.get("device", "cuda")
     fps = cfg.get("fps", 10)
-    
-    # Set up paths based on configuration
-    eval_mode = cfg.get("eval_mode", "id")
-    task_dir_name = f"vis_infer_final_{task}"
-    if eval_mode != "id":
-        task_dir_name = f"{task_dir_name}_{eval_mode}"
-    out_dir = Path(base_out_dir) / task_dir_name
-    
     render_width = cfg.get("render_width", 360)
     render_height = cfg.get("render_height", 640)
     plot_width = cfg.get("plot_width", 420)
@@ -919,10 +959,75 @@ def main() -> None:
     align_root_to_gt = cfg.get("align_root_to_gt", False)
     render_four_rows = cfg.get("render_four_rows", False)
     render_emg_curves = cfg.get("render_emg_curves", False)
+    print_cache_hits = bool(cfg.get("print_cache_hits", True))
+
+    def _official_ckpt_path(sample: SampleRef) -> str:
+        if eval_mode == "id":
+            return str(Path(cfg.get(task, {}).get("checkpoint", "")))
+        if eval_mode == "ood_exercise":
+            ckpt_dir = Path(cfg.get("ood_exercise", {}).get(task, {}).get("checkpoint_dir", ""))
+            task_suffix = "emgtopose" if task == "emg2pose" else "posetoemg"
+            ex = ood_target_exercise or sample.exercise
+            return str(ckpt_dir / f"official_ood_cond_{ex}_{task_suffix}" / "model_100.pth")
+        if eval_mode == "ood_person":
+            ckpt_dir = Path(cfg.get("ood_person", {}).get(task, {}).get("checkpoint_dir", ""))
+            task_suffix = "emgtopose" if task == "emg2pose" else "posetoemg"
+            sub = ood_target_subject or sample.subject
+            return str(ckpt_dir / f"official_ood_person_{sub}_{task_suffix}" / "model_100.pth")
+        raise ValueError(f"Unknown eval_mode: {eval_mode}")
+
+    def _our_ckpt_path(sample: SampleRef) -> str:
+        if eval_mode == "id":
+            return str(Path(cfg.get(task, {}).get("our_checkpoint", "")))
+        if eval_mode == "ood_exercise":
+            ckpt_dir = Path(cfg.get("ood_exercise", {}).get(task, {}).get("our_checkpoint_dir", ""))
+            ex = ood_target_exercise or sample.exercise
+            return str(ckpt_dir / ex / "best.pt")
+        if eval_mode == "ood_person":
+            ckpt_dir = Path(cfg.get("ood_person", {}).get(task, {}).get("our_checkpoint_dir", ""))
+            sub = ood_target_subject or sample.subject
+            return str(ckpt_dir / sub / "best.pt")
+        raise ValueError(f"Unknown eval_mode: {eval_mode}")
+
+    def _read_metric(temp_dir: Path, sample_id: str, is_our: bool) -> float | None:
+        name = f"{sample_id}_our_metric.json" if is_our else f"{sample_id}_metric.json"
+        p = temp_dir / name
+        if not p.exists():
+            return None
+        with open(p, "r") as f:
+            m = json.load(f)
+        v = m.get("official_global_rmse", None)
+        return float(v) if v is not None else None
+
+    print("\n--- Run Config ---")
+    print(f"config: {args.config}")
+    print(f"task: {task}  phase: {phase}")
+    print(f"eval_mode: {eval_mode}")
+    print(f"ood_use_model_eval_on_id: {ood_use_model_eval_on_id}")
+    print(f"ood_target_exercise: {ood_target_exercise}")
+    print(f"ood_target_subject: {ood_target_subject}")
+    print(f"out_dir: {out_dir.resolve()}")
 
     random.seed(seed)
     
     samples = _scan_samples(dataset_root, phase)
+    if eval_mode == "ood_exercise":
+        if ood_use_model_eval_on_id and not ood_target_exercise:
+            raise ValueError("ood_use_model_eval_on_id requires ood_target_exercise when eval_mode=ood_exercise")
+        if ood_target_exercise:
+            if ood_use_model_eval_on_id:
+                samples = [s for s in samples if s.exercise != ood_target_exercise]
+            else:
+                samples = [s for s in samples if s.exercise == ood_target_exercise]
+    elif eval_mode == "ood_person":
+        if ood_use_model_eval_on_id and not ood_target_subject:
+            raise ValueError("ood_use_model_eval_on_id requires ood_target_subject when eval_mode=ood_person")
+        if ood_target_subject:
+            if ood_use_model_eval_on_id:
+                samples = [s for s in samples if s.subject != ood_target_subject]
+            else:
+                samples = [s for s in samples if s.subject == ood_target_subject]
+
     samples_by_exercise = {}
     for s in samples: samples_by_exercise.setdefault(s.exercise, []).append(s)
 
@@ -931,10 +1036,11 @@ def main() -> None:
 
     selected_by_exercise = {}
     filter_worst_n = cfg.get("filter_worst_n", 0)
+    filter_our_best_n = cfg.get("filter_our_best_n", 0)
     filter_our_best_diff_n = cfg.get("filter_our_best_diff_n", 0)
     for ex in exercise_names:
         cand = samples_by_exercise[ex]
-        if filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
+        if filter_worst_n > 0 or filter_our_best_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
             # Load ALL samples for inference to find the global extreme
             selected_by_exercise[ex] = cand
         else:
@@ -959,6 +1065,9 @@ def main() -> None:
 
     total_inference_time = 0.0
     total_visualization_time = 0.0
+    exported_videos: list[str] = []
+    cache_hits = {"official_pred": 0, "official_metric": 0, "our_pred": 0, "our_metric": 0}
+    cache_misses = {"official_pred": 0, "official_metric": 0, "our_pred": 0, "our_metric": 0}
     
     # Phase 1: Inference & Caching
     all_prepared = {}
@@ -981,16 +1090,21 @@ def main() -> None:
             if task == "pose2emg":
                 if cache_file.exists():
                     pred_emg_8_t = np.load(cache_file)
+                    cache_hits["official_pred"] += 1
                 else:
+                    cache_misses["official_pred"] += 1
                     t0 = time.time()
                     pred_emg_8_t = _infer_emg(model, arrays["joints3d_t_25_3"], condval, device)
                     total_inference_time += time.time() - t0
                     np.save(cache_file, pred_emg_8_t)
                 
                 if not metric_file.exists():
+                    cache_misses["official_metric"] += 1
                     gt_flat = arrays["emg_8_t"].T # t, 8
                     metric = _compute_official_metrics(pred_emg_8_t.T, gt_flat, task)
                     with open(metric_file, 'w') as mf: json.dump(metric, mf)
+                else:
+                    cache_hits["official_metric"] += 1
                     
                 gt_emg_mesh = _normalize_emg_for_mesh(arrays["emg_8_t"], sample.subject)
                 pred_emg_mesh = _normalize_emg_for_mesh(pred_emg_8_t, sample.subject)
@@ -1003,15 +1117,20 @@ def main() -> None:
             else:
                 if cache_file.exists():
                     pred_joints = np.load(cache_file)
+                    cache_hits["official_pred"] += 1
                 else:
+                    cache_misses["official_pred"] += 1
                     t0 = time.time()
                     pred_joints = _infer_pose(model, arrays["emg_8_t"], condval, device)
                     total_inference_time += time.time() - t0
                     np.save(cache_file, pred_joints)
                 
                 if not metric_file.exists():
+                    cache_misses["official_metric"] += 1
                     metric = _compute_official_metrics(pred_joints, arrays["joints3d_t_25_3"][:, :25, :], task)
                     with open(metric_file, 'w') as mf: json.dump(metric, mf)
+                else:
+                    cache_hits["official_metric"] += 1
                     
                 prepared.append({
                     "sample": sample, "gt_joints": arrays["joints3d_t_25_3"], "pred_joints": pred_joints,
@@ -1032,9 +1151,6 @@ def main() -> None:
             if our_model is None:
                 continue
             
-            # Use batch_size from config, default to None (run all at once)
-            batch_size = cfg.get("inference_batch_size", None)
-            
             temp_dir = out_dir / "temp" / sample.exercise
             our_cache_file = temp_dir / f"{sample.sample_id}_our_pred.npy"
             our_metric_file = temp_dir / f"{sample.sample_id}_our_metric.json"
@@ -1043,22 +1159,19 @@ def main() -> None:
             if task == "pose2emg":
                 if our_cache_file.exists():
                     our_pred_emg_8_t = np.load(our_cache_file)
+                    cache_hits["our_pred"] += 1
                 else:
-                    if batch_size and item["raw_joints"].shape[0] > batch_size:
-                        our_pred_emg_8_t = []
-                        for b_idx in range(0, item["raw_joints"].shape[0], batch_size):
-                            b_joints = item["raw_joints"][b_idx:b_idx+batch_size]
-                            b_pred = _infer_our_pose2emg(our_model, our_stage1, b_joints, condval, device)
-                            our_pred_emg_8_t.append(b_pred)
-                        our_pred_emg_8_t = np.concatenate(our_pred_emg_8_t, axis=1) # t is dimension 1 for emg
-                    else:
-                        our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
+                    cache_misses["our_pred"] += 1
+                    our_pred_emg_8_t = _infer_our_pose2emg(our_model, our_stage1, item["raw_joints"], condval, device)
                     np.save(our_cache_file, our_pred_emg_8_t)
                 
                 if not our_metric_file.exists():
+                    cache_misses["our_metric"] += 1
                     gt_flat = item["raw_emg"].T
                     metric = _compute_official_metrics(our_pred_emg_8_t.T, gt_flat, task)
                     with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                else:
+                    cache_hits["our_metric"] += 1
                     
                 our_pred_emg_mesh = _normalize_emg_for_mesh(our_pred_emg_8_t, sample.subject)
                 item["our_pred_emg_plot"] = our_pred_emg_8_t
@@ -1066,57 +1179,64 @@ def main() -> None:
             else:
                 if our_cache_file.exists():
                     our_pred_joints = np.load(our_cache_file)
+                    cache_hits["our_pred"] += 1
                 else:
-                    if batch_size and item["raw_emg"].shape[1] > batch_size:
-                        our_pred_joints = []
-                        for b_idx in range(0, item["raw_emg"].shape[1], batch_size):
-                            b_emg = item["raw_emg"][:, b_idx:b_idx+batch_size]
-                            b_joints = item["raw_joints"][b_idx:b_idx+batch_size]
-                            b_pred = _infer_our_emg2pose(our_model, our_stage1, b_emg, condval, device, b_joints)
-                            our_pred_joints.append(b_pred)
-                        our_pred_joints = np.concatenate(our_pred_joints, axis=0) # t is dimension 0 for joints
-                    else:
-                        our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
+                    cache_misses["our_pred"] += 1
+                    our_pred_joints = _infer_our_emg2pose(our_model, our_stage1, item["raw_emg"], condval, device, item["raw_joints"])
                     np.save(our_cache_file, our_pred_joints)
                     
                 if not our_metric_file.exists():
+                    cache_misses["our_metric"] += 1
                     metric = _compute_official_metrics(our_pred_joints, item["raw_joints"][:, :25, :], task)
                     with open(our_metric_file, 'w') as mf: json.dump(metric, mf)
+                else:
+                    cache_hits["our_metric"] += 1
                     
                 item["our_pred_joints"] = our_pred_joints
 
     # Global Filtering
-    if filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
+    if filter_worst_n > 0 or filter_our_best_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
         all_items_with_scores = []
         for exercise, (prepared, _) in all_prepared.items():
             temp_dir = out_dir / "temp" / exercise
             for item in prepared:
-                if filter_global_random_n > 0 and filter_our_best_diff_n == 0 and filter_worst_n == 0:
+                if filter_global_random_n > 0:
                     score = random.random()
                     all_items_with_scores.append((score, item))
                     continue
                     
                 # Get Official RMSE
                 metric_file = temp_dir / f"{item['sample'].sample_id}_metric.json"
-                official_rmse = 0.0
+                official_rmse = None
                 if metric_file.exists():
                     with open(metric_file, 'r') as mf:
                         m = json.load(mf)
-                        official_rmse = m.get("official_global_rmse", 0.0)
+                        official_rmse = m.get("official_global_rmse", None)
+                if official_rmse is None:
+                    continue
+                official_rmse = float(official_rmse)
                 
                 # Get Our RMSE
                 our_metric_file = temp_dir / f"{item['sample'].sample_id}_our_metric.json"
-                our_rmse = 0.0
+                our_rmse = None
                 if our_metric_file.exists():
                     with open(our_metric_file, 'r') as mf:
                         m = json.load(mf)
-                        our_rmse = m.get("official_global_rmse", 0.0)
+                        our_rmse = m.get("official_global_rmse", None)
+                our_rmse = float(our_rmse) if our_rmse is not None else None
                 
                 # Apply the max threshold filter
-                if filter_our_max_rmse_threshold < 999.0 and our_rmse > filter_our_max_rmse_threshold:
-                    continue
+                if filter_our_max_rmse_threshold < 999.0:
+                    if our_rmse is None or our_rmse > filter_our_max_rmse_threshold:
+                        continue
                 
-                if filter_our_best_diff_n > 0:
+                if filter_our_best_n > 0:
+                    if our_rmse is None:
+                        continue
+                    score = -our_rmse
+                elif filter_our_best_diff_n > 0:
+                    if our_rmse is None:
+                        continue
                     score = official_rmse - our_rmse # Higher is better (we beat official by more)
                 else:
                     score = official_rmse # Higher is worse
@@ -1126,15 +1246,22 @@ def main() -> None:
         # Sort globally descending
         all_items_with_scores.sort(key=lambda x: x[0], reverse=True)
         
-        if filter_our_best_diff_n > 0:
+        if filter_our_best_n > 0:
+            target_n = filter_our_best_n
+            filter_diversity_target = cfg.get("filter_diversity_target", "none")
+            mode_name = "global_best_our"
+        elif filter_our_best_diff_n > 0:
             target_n = filter_our_best_diff_n
             filter_diversity_target = cfg.get("filter_diversity_target", "none")
+            mode_name = "global_best_diff"
         elif filter_worst_n > 0:
             target_n = filter_worst_n
             filter_diversity_target = cfg.get("filter_diversity_target", "none")
+            mode_name = "global_worst"
         else:
             target_n = filter_global_random_n
             filter_diversity_target = "both" # default for pure random
+            mode_name = "all_random"
             
         seen_exercises = set()
         seen_subjects = set()
@@ -1164,23 +1291,46 @@ def main() -> None:
             selected_items.append(item)
             
         # If both a metric filter and global random are set, random sample from the filtered results
-        if (filter_our_best_diff_n > 0 or filter_worst_n > 0) and filter_global_random_n > 0:
+        if (filter_our_best_n > 0 or filter_our_best_diff_n > 0 or filter_worst_n > 0) and filter_global_random_n > 0:
             if len(selected_items) > filter_global_random_n:
                 selected_items = random.sample(selected_items, filter_global_random_n)
         
         # Repackage into a single pseudo-exercise
         if selected_items:
-            if filter_global_random_n > 0 and filter_our_best_diff_n == 0 and filter_worst_n == 0:
-                pseudo_name = "all_random"
-            elif filter_our_best_diff_n > 0:
-                pseudo_name = "global_best_diff"
-            else:
-                pseudo_name = "global_worst"
+            pseudo_name = mode_name
+                
+            if filter_global_random_n > 0 and (filter_our_best_n > 0 or filter_our_best_diff_n > 0 or filter_worst_n > 0):
+                pseudo_name = f"{pseudo_name}_random_sampled"
                 
             global_max_t = max(item["emg_plot"].shape[1] if task != "pose2emg" else item["gt_emg_plot"].shape[1] for item in selected_items)
             all_prepared = {pseudo_name: (selected_items, global_max_t)}
         else:
             all_prepared = {}
+
+    print("\n--- Selected Cases ---")
+    selected_flat = []
+    for ex, (prepared, _) in all_prepared.items():
+        for item in prepared:
+            sample = item["sample"]
+            temp_dir = out_dir / "temp" / sample.exercise
+            official_rmse = _read_metric(temp_dir, sample.sample_id, is_our=False)
+            our_rmse = _read_metric(temp_dir, sample.sample_id, is_our=True)
+            selected_flat.append(
+                {
+                    "case": sample.key,
+                    "official_rmse": official_rmse,
+                    "our_rmse": our_rmse,
+                    "official_ckpt": _official_ckpt_path(sample),
+                    "our_ckpt": _our_ckpt_path(sample),
+                }
+            )
+    selected_flat.sort(key=lambda x: x["case"])
+    print(f"n_selected: {len(selected_flat)}")
+    for row in selected_flat:
+        print(
+            f"- {row['case']} | official_rmse={row['official_rmse']} | our_rmse={row['our_rmse']} | "
+            f"official_ckpt={row['official_ckpt']} | our_ckpt={row['our_ckpt']}"
+        )
 
     # Phase 2: Visualization
     for exercise, (prepared, max_t) in tqdm(sorted(all_prepared.items(), key=lambda x: x[0]), desc="Phase 2: Visualization"):
@@ -1189,7 +1339,9 @@ def main() -> None:
         
         if exercise == "all_random":
             vid_out_dir = out_dir / "all_random"
-        elif filter_worst_n > 0 or filter_our_best_diff_n > 0 or filter_global_random_n > 0:
+        elif "random_sampled" in exercise:
+            vid_out_dir = out_dir / "selected_random_sampled"
+        elif filter_worst_n > 0 or filter_our_best_diff_n > 0:
             vid_out_dir = out_dir / "selected"
         else:
             vid_out_dir = out_dir / exercise
@@ -1273,12 +1425,14 @@ def main() -> None:
 
         cell_h, cell_w = cell_streams[0][0].shape[:2]
         
-        writer = _open_video_writer(vid_out_dir / f"grid_{task}_n{len(prepared)}.mp4", fps, (cell_w * len(cell_streams), cell_h))
+        video_path = vid_out_dir / f"grid_{task}_n{len(prepared)}.mp4"
+        writer = _open_video_writer(video_path, fps, (cell_w * len(cell_streams), cell_h))
         try:
             for i in range(max_t):
                 writer.write(np.concatenate([cell_streams[c][i] for c in range(len(cell_streams))], axis=1))
         finally:
             writer.release()
+        exported_videos.append(str(video_path.resolve()))
         total_visualization_time += time.time() - t1
 
     print(f"\n--- Time Statistics ---")
@@ -1286,6 +1440,14 @@ def main() -> None:
     print(f"Total Visualization Time: {total_visualization_time:.2f} s")
     if total_inference_time > 0:
         print(f"Visualization takes {total_visualization_time / total_inference_time:.1f}x longer than inference.")
+    print("\n--- Outputs ---")
+    print(f"out_dir: {out_dir.resolve()}")
+    for p in exported_videos:
+        print(f"- {p}")
+    if print_cache_hits:
+        print("\n--- Cache Summary ---")
+        print(f"hits: {cache_hits}")
+        print(f"misses: {cache_misses}")
 
 if __name__ == "__main__":
     main()
